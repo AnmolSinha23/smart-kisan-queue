@@ -10,6 +10,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { DemoProvider, stages, useDemo, type DemoAction, type Stage } from "@/lib/kisan-state";
 import { OperationDialog, type DialogKind } from "@/components/operation-dialogs";
+import * as api from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 type View = "command" | "farmer" | "ivr" | "trace" | "government";
@@ -216,6 +217,19 @@ function Events() { const { state } = useDemo(); return <Panel title="Recent Eve
 function FarmerExperience({ setDialog }: { setDialog: (d: DialogKind) => void }) {
   const { state } = useDemo();
   const tx = state.tx;
+  const [history, setHistory] = useState<api.PaymentHistoryItem[]>([]);
+  const [loadingHistory, setLoadingHistory] = useState(false);
+
+  const farmerId = tx.farmerId || "FMR-104";
+
+  useEffect(() => {
+    setLoadingHistory(true);
+    api.getFarmerPaymentHistory(farmerId)
+      .then(setHistory)
+      .catch(() => setHistory([]))
+      .finally(() => setLoadingHistory(false));
+  }, [farmerId, state.paymentComplete, tx.paymentId, tx.procurementId]);
+
   return <div className="mx-auto max-w-5xl">
     <PageHeading eyebrow="Farmer Experience · किसान सेवा" title={tx.farmerName ? `Namaste, ${tx.farmerName}` : "Welcome to KisanOne"} description={tx.requestId ? `${tx.farmerId} · ${tx.cropCode ?? "—"} · ${tx.assignedCentreId ?? "—"}` : "Create a procurement request to begin"} action={<Button onClick={() => setDialog("booking")}><Sprout/>Book Procurement</Button>} />
     {state.bottleneck && <div className="mb-4 flex gap-3 rounded-md border border-warning/40 bg-warning-muted p-4 text-sm"><AlertTriangle className="size-5 shrink-0 text-warning-foreground"/><div><p className="font-bold">Capacity slowdown · क्षमता में देरी</p><p className="mt-1 text-muted-foreground">Your centre arrival has been delayed. Please do not leave early. / कृपया देरी से आएं।</p></div></div>}
@@ -245,15 +259,45 @@ function FarmerExperience({ setDialog }: { setDialog: (d: DialogKind) => void })
       <Panel title="Live Pipeline Tracking" subtitle="Updates from real backend operations">
         <div className="space-y-3">{stages.map((s,i)=><div key={s} className="flex items-center gap-3"><span className={cn("grid size-7 place-items-center rounded-full text-xs",i<stages.indexOf(state.stage)||(s==="Payment"&&state.paymentComplete)?"bg-success text-success-foreground":s===state.stage?"bg-primary text-primary-foreground":"bg-muted text-muted-foreground")}>{i<stages.indexOf(state.stage)?<Check className="size-3"/>:i+1}</span><span className={cn("text-sm",s===state.stage&&"font-bold")}>{s}</span>{s===state.stage&&<span className="ml-auto text-xs text-primary">Current stage</span>}</div>)}</div>
       </Panel>
-      <Panel title="Payment & Transaction History">
-        {tx.procurementId ? (
-          <div className="rounded-md border p-4">
-            <div className="flex items-start justify-between"><div><p className="font-bold">{tx.procurementId}</p><p className="text-xs text-muted-foreground">{tx.lotId} · {tx.cropCode} Grade {tx.qcGrade ?? "—"}</p></div><span className={cn("rounded-full px-2 py-1 text-xs font-bold", tx.paymentStatus === "PAID" ? "bg-success-muted text-success" : "bg-muted")}>{tx.paymentStatus ?? "Pending"}</span></div>
-            <div className="mt-4 flex justify-between border-t pt-3"><span className="text-sm text-muted-foreground">Gross amount</span><strong>₹{tx.grossAmount?.toLocaleString("en-IN", { minimumFractionDigits: 2 }) ?? "—"}</strong></div>
-            {tx.payableAmount != null && <div className="flex justify-between border-t pt-3 mt-2"><span className="text-sm text-muted-foreground">Payable amount</span><strong>₹{tx.payableAmount.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</strong></div>}
+      <Panel title="Payment & Transaction History" subtitle="Full payment records from backend">
+        {loadingHistory && <p className="text-sm text-muted-foreground italic">Loading payment history...</p>}
+        {!loadingHistory && history.length === 0 && (
+          <p className="text-sm text-muted-foreground italic">No payment records found for this farmer.</p>
+        )}
+        {!loadingHistory && history.length > 0 && (
+          <div className="space-y-3">
+            {history.map(item => (
+              <div key={item.paymentId} className="rounded-md border p-3.5">
+                <div className="flex items-start justify-between">
+                  <div>
+                    <p className="font-bold text-sm">{item.paymentId}</p>
+                    <p className="text-xs text-muted-foreground">
+                      Procurement: {item.procurementId} · Lot: {item.lotId} · Crop: {item.cropCode}
+                    </p>
+                  </div>
+                  <span className={cn(
+                    "rounded-full px-2 py-0.5 text-xs font-bold",
+                    item.paymentStatus === "PAID" ? "bg-success-muted text-success" :
+                    item.paymentStatus === "PROCESSING" ? "bg-info-muted text-info" : "bg-muted"
+                  )}>
+                    {item.paymentStatus}
+                  </span>
+                </div>
+                <div className="mt-2.5 flex items-center justify-between border-t pt-2 text-sm">
+                  <span className="text-xs text-muted-foreground">
+                    Quantity: <strong className="text-foreground">{item.quantityKg} kg</strong>
+                    {item.paymentMethod && <span className="ml-1.5">({item.paymentMethod})</span>}
+                  </span>
+                  <strong className="font-mono text-sm">₹{item.payableAmount.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</strong>
+                </div>
+                {item.paymentReference && (
+                  <p className="mt-1 text-[11px] font-mono text-muted-foreground">
+                    Ref: {item.paymentReference}
+                  </p>
+                )}
+              </div>
+            ))}
           </div>
-        ) : (
-          <p className="text-sm text-muted-foreground italic">No procurement transaction yet. Complete the pipeline to see real payment data.</p>
         )}
       </Panel>
     </div>
@@ -323,34 +367,125 @@ function Detail({label,value}:{label:string;value:string}) { return <div><dt cla
 /* ─── Government Dashboard ─────────────────────────────────────────────────── */
 
 function GovernmentDashboard() {
+  const [metrics, setMetrics] = useState<api.GovernmentMetrics | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    setLoading(true);
+    api.getGovernmentMetrics()
+      .then(setMetrics)
+      .catch(() => setMetrics(null))
+      .finally(() => setLoading(false));
+  }, []);
+
   return <>
-    <PageHeading eyebrow="Government monitoring" title="District Dashboard" description="Demo / Placeholder — backend does not yet provide aggregate metrics"/>
-    <div className="rounded-md border border-info/30 bg-info-muted p-4 mb-4 text-sm text-info">
-      <strong>Note:</strong> The values below are demo placeholders. The backend does not currently provide aggregate dashboard metrics. Individual transaction data uses real backend IDs.
+    <PageHeading eyebrow="Government monitoring" title="District Dashboard" description="Real transaction-derived procurement statistics & telemetry"/>
+    <div className="rounded-md border border-info/30 bg-info-muted p-3.5 mb-4 text-sm text-info">
+      <strong>Data Source:</strong> Procurement and payment metrics below are derived from real transaction records in the backend. System parameters not tracked by the API are explicitly marked as demo placeholders.
     </div>
     <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-      <GovKpi label="Procured today" value="—" change="Demo placeholder"/>
-      <GovKpi label="Farmers served" value="—" change="Demo placeholder"/>
-      <GovKpi label="Avg. wait" value="—" change="Demo placeholder"/>
-      <GovKpi label="Active centres" value="—" change="Demo placeholder"/>
+      <GovKpi
+        label="Total Procured"
+        value={metrics ? `${metrics.totalQuantityMT} MT` : "—"}
+        change={metrics ? `${metrics.totalQuantityKg.toLocaleString()} kg across ${metrics.totalProcurements} transaction(s)` : "Loading..."}
+        isReal={!!metrics}
+      />
+      <GovKpi
+        label="Farmers Served"
+        value={metrics ? String(metrics.totalFarmersServed) : "—"}
+        change={metrics ? `${metrics.totalFarmersServed} unique farmer(s) completed` : "Loading..."}
+        isReal={!!metrics}
+      />
+      <GovKpi
+        label="Active Centres"
+        value={metrics ? String(metrics.activeCentresCount) : "—"}
+        change={metrics ? `${metrics.activeCentresCount} operational procurement centre(s)` : "Loading..."}
+        isReal={!!metrics}
+      />
+      <GovKpi
+        label="Avg. Wait Time"
+        value="21 min"
+        change="Demo / Placeholder — backend aggregate unavailable"
+        isReal={false}
+      />
     </div>
     <div className="mt-4 grid gap-4 lg:grid-cols-[1.25fr_.75fr]">
-      <Panel title="Peer Centre Comparison" subtitle="Demo / Placeholder — backend aggregate unavailable">
-        <p className="text-sm text-muted-foreground italic">Centre comparison data requires backend aggregate endpoints not yet implemented.</p>
+      <Panel title="Centre Performance" subtitle="Real procurement transactions per active centre">
+        {loading && <p className="text-sm text-muted-foreground italic">Loading centre statistics...</p>}
+        {!loading && (!metrics || metrics.centreComparison.length === 0) && (
+          <p className="text-sm text-muted-foreground italic">No centre procurement data found.</p>
+        )}
+        {!loading && metrics && metrics.centreComparison.map(c => (
+          <div key={c.centreId} className="flex items-center justify-between border-b py-2.5 last:border-0">
+            <div>
+              <p className="text-sm font-bold">{c.centreName}</p>
+              <p className="text-xs text-muted-foreground">{c.centreId} · {c.procurementsCount} transaction(s)</p>
+            </div>
+            <strong className="text-sm font-mono">{c.totalQuantityKg.toLocaleString()} kg</strong>
+          </div>
+        ))}
       </Panel>
-      <Panel title="District Alerts" subtitle="Demo / Placeholder">
-        <p className="text-sm text-muted-foreground italic">Alert aggregation requires backend endpoints not yet implemented.</p>
+      <Panel title="District Alerts" subtitle="Demo / Placeholder — backend aggregate unavailable">
+        <p className="text-sm text-muted-foreground italic">Alert aggregation requires telemetry streams not provided by the current API.<DemoTag /></p>
       </Panel>
     </div>
     <div className="mt-4 grid gap-4 md:grid-cols-3">
-      <Panel title="Commodity Mix"><p className="text-sm text-muted-foreground italic">Demo placeholder<DemoTag /></p></Panel>
-      <Panel title="Payments"><p className="text-sm text-muted-foreground italic">Demo placeholder<DemoTag /></p></Panel>
-      <Panel title="Storage Readiness"><p className="text-sm text-muted-foreground italic">Demo placeholder<DemoTag /></p></Panel>
+      <Panel title="Commodity Mix" subtitle="Real breakdown of procured crops">
+        {loading && <p className="text-sm text-muted-foreground italic">Loading crop distribution...</p>}
+        {!loading && (!metrics || metrics.commodityMix.length === 0) && (
+          <p className="text-sm text-muted-foreground italic">No commodity procurement recorded yet.</p>
+        )}
+        {!loading && metrics && metrics.commodityMix.map(c => (
+          <div key={c.cropCode} className="space-y-1.5 py-1">
+            <div className="flex justify-between text-xs font-semibold">
+              <span>{c.cropCode} ({c.count} tx)</span>
+              <span>{c.quantityKg.toLocaleString()} kg · {c.percent}%</span>
+            </div>
+            <div className="h-2 rounded-full bg-muted overflow-hidden">
+              <div className="h-full bg-primary" style={{ width: `${c.percent}%` }} />
+            </div>
+          </div>
+        ))}
+      </Panel>
+      <Panel title="Payments Settled" subtitle="Real payment transactions from backend">
+        {loading && <p className="text-sm text-muted-foreground italic">Loading payment totals...</p>}
+        {!loading && metrics && (
+          <div>
+            <p className="text-2xl font-bold font-mono">
+              ₹{metrics.totalPaymentsAmount.toLocaleString("en-IN", { minimumFractionDigits: 2 })}
+            </p>
+            <p className="text-xs text-muted-foreground mt-1">
+              {metrics.totalPaymentsSettled} payment(s) marked as PAID
+            </p>
+            <p className="text-xs text-muted-foreground mt-2 border-t pt-2">
+              Total procurement value: ₹{metrics.totalGrossAmount.toLocaleString("en-IN", { minimumFractionDigits: 2 })}
+            </p>
+          </div>
+        )}
+      </Panel>
+      <Panel title="Storage Readiness" subtitle="Demo / Placeholder — backend aggregate unavailable">
+        <p className="text-sm text-muted-foreground italic">Storage readiness requires warehouse telemetry not provided by the current API.<DemoTag /></p>
+      </Panel>
     </div>
   </>;
 }
 
-function GovKpi({label,value,change}:{label:string;value:string;change:string}) { return <div className="rounded-md border bg-card p-4"><p className="text-xs text-muted-foreground">{label}<DemoTag /></p><p className="mt-2 text-xl font-bold sm:text-2xl text-muted-foreground">{value}</p><p className="mt-1 text-[10px] text-muted-foreground italic">{change}</p></div>; }
+function GovKpi({ label, value, change, isReal }: { label: string; value: string; change: string; isReal?: boolean }) {
+  return (
+    <div className="rounded-md border bg-card p-4">
+      <p className="text-xs text-muted-foreground flex items-center justify-between">
+        {label}
+        {!isReal && <DemoTag />}
+      </p>
+      <p className={cn("mt-2 text-xl font-bold sm:text-2xl", isReal ? "text-foreground" : "text-muted-foreground")}>
+        {value}
+      </p>
+      <p className={cn("mt-1 text-[10px]", isReal ? "text-success font-medium" : "text-muted-foreground italic")}>
+        {change}
+      </p>
+    </div>
+  );
+}
 
 /* ─── Demo Controls & Judge Demo ───────────────────────────────────────────── */
 

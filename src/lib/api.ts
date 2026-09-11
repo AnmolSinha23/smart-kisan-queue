@@ -170,6 +170,12 @@ export const getProcurementRequest = (id: string) =>
 export const listProcurementRequests = () =>
   request<ProcurementRequest[]>("GET", "/procurement-requests");
 
+export const listFarmerProcurementRequests = (farmerId: string) =>
+  request<ProcurementRequest[]>("GET", `/farmers/${farmerId}/procurement-requests`);
+
+export const listCentreProcurementRequests = (centreId: string) =>
+  request<ProcurementRequest[]>("GET", `/centres/${centreId}/procurement-requests`);
+
 // ─── Arrival ────────────────────────────────────────────────────────────────────
 
 export interface ArrivalResult {
@@ -270,6 +276,12 @@ export const createGovProcurement = (lotId: string, p: {
   employeeId: string;
 }) => request<GovProcurement>("POST", `/lots/${lotId}/procurement`, p);
 
+export const getProcurementForLot = (lotId: string) =>
+  request<GovProcurement>("GET", `/lots/${lotId}/procurement`);
+
+export const getProcurement = (procurementId: string) =>
+  request<GovProcurement>("GET", `/procurements/${procurementId}`);
+
 // ─── Payments ───────────────────────────────────────────────────────────────────
 
 export interface Payment {
@@ -278,10 +290,19 @@ export interface Payment {
   farmerId: string;
   payableAmount: number;
   paymentStatus: string;
+  paymentMethod?: string;
+  paymentReference?: string;
+  createdAt?: string;
 }
 
 export const createPayment = (procurementId: string, p: { employeeId: string }) =>
   request<Payment>("POST", `/procurements/${procurementId}/payment`, p);
+
+export const getPaymentForProcurement = (procurementId: string) =>
+  request<Payment>("GET", `/procurements/${procurementId}/payment`);
+
+export const getPayment = (paymentId: string) =>
+  request<Payment>("GET", `/payments/${paymentId}`);
 
 export const updatePaymentStatus = (paymentId: string, p: {
   employeeId: string;
@@ -303,3 +324,163 @@ export interface Rulebook {
 
 export const getRulebook = (cropCode: string) =>
   request<Rulebook>("GET", `/rulebooks/${cropCode}`);
+
+// ─── Composed Aggregations (Derived purely from existing backend endpoints) ─────
+
+export interface PaymentHistoryItem {
+  paymentId: string;
+  procurementId: string;
+  lotId: string;
+  requestId: string;
+  cropCode: string;
+  quantityKg: number;
+  payableAmount: number;
+  paymentStatus: string;
+  paymentMethod?: string;
+  paymentReference?: string;
+  createdAt?: string;
+}
+
+export async function getFarmerPaymentHistory(farmerId: string): Promise<PaymentHistoryItem[]> {
+  try {
+    const requests = await listFarmerProcurementRequests(farmerId);
+    const history: PaymentHistoryItem[] = [];
+
+    for (const req of requests) {
+      if (!req.lotId) continue;
+      try {
+        const proc = await getProcurementForLot(req.lotId);
+        if (!proc || !proc.procurementId) continue;
+        try {
+          const pay = await getPaymentForProcurement(proc.procurementId);
+          if (pay && pay.paymentId) {
+            history.push({
+              paymentId: pay.paymentId,
+              procurementId: proc.procurementId,
+              lotId: proc.lotId,
+              requestId: req.requestId,
+              cropCode: proc.cropCode || req.cropCode,
+              quantityKg: Number(proc.procurementQuantityKg) || 0,
+              payableAmount: Number(pay.payableAmount ?? proc.grossAmount) || 0,
+              paymentStatus: pay.paymentStatus,
+              paymentMethod: pay.paymentMethod,
+              paymentReference: pay.paymentReference,
+              createdAt: pay.createdAt,
+            });
+          }
+        } catch {
+          // No payment recorded yet for this procurement
+        }
+      } catch {
+        // No procurement recorded yet for this lot
+      }
+    }
+
+    // Sort newest first
+    return history.sort((a, b) => {
+      if (a.paymentId && b.paymentId) return b.paymentId.localeCompare(a.paymentId);
+      return 0;
+    });
+  } catch {
+    return [];
+  }
+}
+
+export interface GovernmentMetrics {
+  totalProcurements: number;
+  totalQuantityKg: number;
+  totalQuantityMT: number;
+  totalGrossAmount: number;
+  totalPaymentsSettled: number;
+  totalPaymentsAmount: number;
+  totalFarmersServed: number;
+  activeCentresCount: number;
+  commodityMix: { cropCode: string; count: number; quantityKg: number; percent: number }[];
+  centreComparison: { centreId: string; centreName: string; procurementsCount: number; totalQuantityKg: number }[];
+}
+
+export async function getGovernmentMetrics(): Promise<GovernmentMetrics> {
+  const centres = await listCentres().catch(() => []);
+  const activeCentres = centres.filter(c => c.status === "ACTIVE");
+
+  let totalProcurements = 0;
+  let totalQuantityKg = 0;
+  let totalGrossAmount = 0;
+  let totalPaymentsSettled = 0;
+  let totalPaymentsAmount = 0;
+  const uniqueFarmers = new Set<string>();
+  const cropStats: Record<string, { count: number; quantityKg: number }> = {};
+  const centreComparison: { centreId: string; centreName: string; procurementsCount: number; totalQuantityKg: number }[] = [];
+
+  for (const centre of activeCentres) {
+    let centreProcCount = 0;
+    let centreQty = 0;
+    try {
+      const requests = await listCentreProcurementRequests(centre.centreId);
+      for (const req of requests) {
+        if (!req.lotId) continue;
+        try {
+          const proc = await getProcurementForLot(req.lotId);
+          if (!proc || !proc.procurementId) continue;
+
+          totalProcurements++;
+          centreProcCount++;
+          const qty = Number(proc.procurementQuantityKg) || 0;
+          const gross = Number(proc.grossAmount) || 0;
+          totalQuantityKg += qty;
+          centreQty += qty;
+          totalGrossAmount += gross;
+
+          if (proc.farmerId) uniqueFarmers.add(proc.farmerId);
+          const crop = proc.cropCode || req.cropCode || "UNKNOWN";
+          if (!cropStats[crop]) cropStats[crop] = { count: 0, quantityKg: 0 };
+          cropStats[crop].count++;
+          cropStats[crop].quantityKg += qty;
+
+          try {
+            const pay = await getPaymentForProcurement(proc.procurementId);
+            if (pay) {
+              if (pay.paymentStatus === "PAID") {
+                totalPaymentsSettled++;
+                totalPaymentsAmount += Number(pay.payableAmount) || 0;
+              }
+            }
+          } catch {
+            // No payment yet
+          }
+        } catch {
+          // No procurement yet
+        }
+      }
+    } catch {
+      // Centre requests listing failed
+    }
+
+    centreComparison.push({
+      centreId: centre.centreId,
+      centreName: centre.centreName,
+      procurementsCount: centreProcCount,
+      totalQuantityKg: centreQty,
+    });
+  }
+
+  const commodityMix = Object.entries(cropStats).map(([cropCode, s]) => ({
+    cropCode,
+    count: s.count,
+    quantityKg: s.quantityKg,
+    percent: totalQuantityKg > 0 ? Math.round((s.quantityKg / totalQuantityKg) * 100) : 0,
+  }));
+
+  return {
+    totalProcurements,
+    totalQuantityKg,
+    totalQuantityMT: Number((totalQuantityKg / 1000).toFixed(2)),
+    totalGrossAmount,
+    totalPaymentsSettled,
+    totalPaymentsAmount,
+    totalFarmersServed: uniqueFarmers.size,
+    activeCentresCount: activeCentres.length,
+    commodityMix,
+    centreComparison,
+  };
+}
