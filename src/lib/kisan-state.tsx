@@ -3,6 +3,44 @@ import { createContext, useContext, useMemo, useReducer, type ReactNode } from "
 export const stages = ["Gate", "QC", "Weighment", "Unloading", "Procurement", "Payment"] as const;
 export type Stage = (typeof stages)[number];
 
+/** Real backend entity references from the current transaction. */
+export type TransactionData = {
+  farmerId: string | null;
+  farmerName: string | null;
+  cropCode: string | null;
+  farmerArea: string | null;
+  expectedQuantityKg: number | null;
+  requestId: string | null;
+  assignedCentreId: string | null;
+  assignedCentreName: string | null;
+  assignedSlotId: string | null;
+  lotId: string | null;
+  qcAttemptId: string | null;
+  qcGrade: string | null;
+  qcDecision: string | null;
+  qcPricePerKg: number | null;
+  qcEvaluation: Record<string, unknown> | null;
+  weighmentId: string | null;
+  grossWeightKg: number | null;
+  tareWeightKg: number | null;
+  netWeightKg: number | null;
+  procurementId: string | null;
+  grossAmount: number | null;
+  paymentId: string | null;
+  payableAmount: number | null;
+  paymentStatus: string | null;
+  employeeId: string | null;
+};
+
+const emptyTransaction: TransactionData = {
+  farmerId: null, farmerName: null, cropCode: null, farmerArea: null, expectedQuantityKg: null,
+  requestId: null, assignedCentreId: null, assignedCentreName: null, assignedSlotId: null,
+  lotId: null, qcAttemptId: null, qcGrade: null, qcDecision: null, qcPricePerKg: null,
+  qcEvaluation: null, weighmentId: null, grossWeightKg: null, tareWeightKg: null,
+  netWeightKg: null, procurementId: null, grossAmount: null, paymentId: null,
+  payableAmount: null, paymentStatus: null, employeeId: null,
+};
+
 export type DemoState = {
   requestCreated: boolean;
   arrived: boolean;
@@ -17,6 +55,8 @@ export type DemoState = {
   events: { time: string; text: string; tone: "info" | "success" | "warning" }[];
   sms: string[];
   demoStep: number;
+  /** Real backend data for the current transaction */
+  tx: TransactionData;
 };
 
 export type DemoAction =
@@ -32,10 +72,11 @@ export type DemoAction =
   | { type: "OFFLINE" }
   | { type: "ONLINE" }
   | { type: "MOVE"; stage: Stage }
-  | { type: "DEMO_STEP"; step: number };
+  | { type: "DEMO_STEP"; step: number }
+  | { type: "SET_TX"; data: Partial<TransactionData> };
 
 const initialState: DemoState = {
-  requestCreated: true,
+  requestCreated: false,
   arrived: false,
   bottleneck: false,
   online: true,
@@ -45,13 +86,10 @@ const initialState: DemoState = {
   procurementComplete: false,
   paymentComplete: false,
   queuedActions: [],
-  events: [
-    { time: "10:39:08", text: "Call-to-Come issued to K1-104", tone: "success" },
-    { time: "10:37:42", text: "Capacity plan recalculated · 18 farmers", tone: "info" },
-    { time: "10:35:11", text: "WB-04 telemetry healthy · 12/hr", tone: "info" },
-  ],
-  sms: ["KisanOne: K1-104 approved. Please arrive 10:40 AM–10:55 AM. Queue #4."],
+  events: [],
+  sms: [],
   demoStep: 0,
+  tx: { ...emptyTransaction },
 };
 
 const now = () => new Date().toLocaleTimeString("en-IN", { hour12: false });
@@ -63,23 +101,31 @@ function addEvent(state: DemoState, text: string, tone: "info" | "success" | "wa
 function reducer(state: DemoState, action: DemoAction): DemoState {
   const queueOffline = (label: string) => (state.online ? state.queuedActions : [...state.queuedActions, label]);
   switch (action.type) {
-    case "RESET": return initialState;
-    case "REQUEST": return { ...state, requestCreated: true, stage: "Gate", events: addEvent(state, "Request K1-104 approved by capacity rules", "success"), sms: [...state.sms, "KisanOne: Your wheat procurement request K1-104 is approved."] };
-    case "ARRIVE": return { ...state, arrived: true, stage: "Gate", queuedActions: queueOffline("Arrival K1-104"), events: addEvent(state, `Arrival validated at GATE-02${state.online ? "" : " · queued offline"}`, "success") };
-    case "SLOWDOWN": return { ...state, bottleneck: true, events: addEvent(state, "WB-04 throughput fell 12→6/hr · releases paused", "warning"), sms: [...state.sms, "KisanOne alert: Centre capacity has slowed. Your revised arrival time is 11:05 AM. कृपया 11:05 बजे आएं।"] };
-    case "RESTORE_CAPACITY": return { ...state, bottleneck: false, events: addEvent(state, "WB-04 restored to 12/hr · releases resumed", "success"), sms: [...state.sms, "KisanOne: Centre capacity restored. Your 10:40–10:55 AM window is active."] };
-    case "QC": return { ...state, qcPassed: true, stage: "Weighment", queuedActions: queueOffline("QC pass K1-104"), events: addEvent(state, "QC passed · Grade A · moisture 12.4%", "success") };
-    case "WEIGHT": return { ...state, weightConfirmed: true, stage: "Unloading", queuedActions: queueOffline("Weight 52.40 kg"), events: addEvent(state, "52.40 kg captured from RS-232 WB-04", "success") };
-    case "PROCURE": return { ...state, procurementComplete: true, stage: "Payment", queuedActions: queueOffline("Procurement TXN-10482"), events: addEvent(state, "LOT-2026-0104 and TXN-10482 generated", "success") };
-    case "PAY": return { ...state, paymentComplete: true, stage: "Payment", queuedActions: queueOffline("Payment PAY-10482"), events: addEvent(state, "Payment PAY-10482 completed", "success"), sms: [...state.sms, "KisanOne: ₹1,192.10 payment completed for TXN-10482."] };
+    case "RESET": return { ...initialState, events: [] };
+    case "REQUEST": return { ...state, requestCreated: true, stage: "Gate", events: addEvent(state, state.tx.requestId ? `Procurement request ${state.tx.requestId} created` : "Procurement request created", "success") };
+    case "ARRIVE": return { ...state, arrived: true, stage: "QC", queuedActions: queueOffline("Arrival"), events: addEvent(state, state.tx.lotId ? `Arrival validated — Lot ${state.tx.lotId} created` : "Arrival validated", "success") };
+    case "SLOWDOWN": return { ...state, bottleneck: true, events: addEvent(state, "Weighbridge throughput fell — releases paused", "warning") };
+    case "RESTORE_CAPACITY": return { ...state, bottleneck: false, events: addEvent(state, "Weighbridge restored — releases resumed", "success") };
+    case "QC": return { ...state, qcPassed: state.tx.qcDecision === "PASS" || state.tx.qcGrade !== "F", stage: "Weighment", queuedActions: queueOffline("QC"), events: addEvent(state, state.tx.qcGrade ? `QC: Grade ${state.tx.qcGrade} · ${state.tx.qcDecision} · ₹${state.tx.qcPricePerKg ?? 0}/kg` : "QC completed", state.tx.qcGrade === "F" ? "warning" : "success") };
+    case "WEIGHT": return { ...state, weightConfirmed: true, stage: "Unloading", queuedActions: queueOffline(`Weight ${state.tx.netWeightKg ?? "?"} kg`), events: addEvent(state, state.tx.netWeightKg ? `${state.tx.netWeightKg} kg net weight captured` : "Weight captured", "success") };
+    case "PROCURE": return { ...state, procurementComplete: true, stage: "Payment", queuedActions: queueOffline(`Procurement ${state.tx.procurementId ?? ""}`), events: addEvent(state, state.tx.procurementId ? `${state.tx.procurementId} created · ₹${state.tx.grossAmount?.toLocaleString("en-IN", { minimumFractionDigits: 2 }) ?? "0.00"}` : "Procurement completed", "success") };
+    case "PAY": return { ...state, paymentComplete: true, stage: "Payment", events: addEvent(state, state.tx.paymentId ? `${state.tx.paymentId} · ₹${state.tx.payableAmount?.toLocaleString("en-IN", { minimumFractionDigits: 2 }) ?? "0.00"} · ${state.tx.paymentStatus ?? "PAID"}` : "Payment completed", "success"), sms: [...state.sms, state.tx.payableAmount ? `KisanOne: ₹${state.tx.payableAmount.toLocaleString("en-IN", { minimumFractionDigits: 2 })} payment completed for ${state.tx.procurementId ?? "procurement"}.` : "KisanOne: Payment completed."] };
     case "OFFLINE": return { ...state, online: false, events: addEvent(state, "Connectivity lost · offline-first mode active", "warning") };
     case "ONLINE": return { ...state, online: true, queuedActions: [], events: addEvent(state, `${state.queuedActions.length} local action(s) synced`, "success") };
-    case "MOVE": return { ...state, stage: action.stage, events: addEvent(state, `K1-104 moved to ${action.stage}`, "info") };
+    case "MOVE": return { ...state, stage: action.stage, events: addEvent(state, `Moved to ${action.stage}`, "info") };
     case "DEMO_STEP": return { ...state, demoStep: action.step };
+    case "SET_TX": return { ...state, tx: { ...state.tx, ...action.data } };
   }
 }
 
-type ContextValue = { state: DemoState; dispatch: React.Dispatch<DemoAction>; arrivalWindow: string; eta: number; queuePosition: number; gross: number };
+type ContextValue = {
+  state: DemoState;
+  dispatch: React.Dispatch<DemoAction>;
+  arrivalWindow: string;
+  eta: number;
+  queuePosition: number;
+  gross: number;
+};
 const DemoContext = createContext<ContextValue | null>(null);
 
 export function DemoProvider({ children }: { children: ReactNode }) {
@@ -90,7 +136,7 @@ export function DemoProvider({ children }: { children: ReactNode }) {
     arrivalWindow: state.bottleneck ? "11:05 AM – 11:20 AM" : "10:40 AM – 10:55 AM",
     eta: state.paymentComplete ? 0 : state.bottleneck ? 40 : state.stage === "Gate" ? 18 : Math.max(4, 16 - stages.indexOf(state.stage) * 3),
     queuePosition: state.paymentComplete ? 0 : Math.max(1, 4 - stages.indexOf(state.stage)),
-    gross: 1192.1,
+    gross: state.tx.grossAmount ?? 1192.1,
   }), [state]);
   return <DemoContext.Provider value={value}>{children}</DemoContext.Provider>;
 }

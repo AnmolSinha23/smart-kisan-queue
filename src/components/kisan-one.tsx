@@ -9,10 +9,10 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { DemoProvider, stages, useDemo, type DemoAction, type Stage } from "@/lib/kisan-state";
+import { OperationDialog, type DialogKind } from "@/components/operation-dialogs";
 import { cn } from "@/lib/utils";
 
 type View = "command" | "farmer" | "ivr" | "trace" | "government";
-type DialogKind = "arrival" | "qc" | "weight" | "procure" | "payment" | "booking" | null;
 const nav: { id: View; label: string; short: string; icon: ComponentType<{ className?: string }> }[] = [
   { id: "command", label: "Command Centre", short: "Command", icon: Gauge },
   { id: "farmer", label: "Farmer Experience", short: "Farmer", icon: Sprout },
@@ -24,21 +24,21 @@ const nav: { id: View; label: string; short: string; icon: ComponentType<{ class
 const demoSteps: { title: string; text: string; view: View; action?: DemoAction; dialog?: DialogKind }[] = [
   { title: "The operating problem", text: "Sehore has 142 expected farmers. KisanOne begins with live capacity, not static tokens.", view: "command" },
   { title: "One shared operational picture", text: "Every channel reads the same queue, capacity and transaction state.", view: "command" },
-  { title: "Farmer requests procurement", text: "Ramesh Kumar submits 52.4 kg of wheat for Sehore centre.", view: "farmer", action: { type: "REQUEST" }, dialog: "booking" },
-  { title: "Rules approve capacity", text: "Deterministic rules find a safe window and issue K1-104.", view: "farmer" },
-  { title: "Dynamic Call-to-Come", text: "Ramesh receives 10:40–10:55 AM, queue #4, before leaving home.", view: "farmer" },
+  { title: "Farmer requests procurement", text: "Submit a real procurement request to the backend.", view: "farmer", dialog: "booking" },
+  { title: "Rules approve capacity", text: "The backend deterministic rules assign a centre and slot.", view: "farmer" },
+  { title: "Dynamic Call-to-Come", text: "The assigned arrival window is based on the slot returned by the backend.", view: "farmer" },
   { title: "Accessible IVR channel", text: "Key 2 announces the exact same arrival window without a smartphone.", view: "ivr" },
-  { title: "Arrival validation", text: "A signed QR links farmer and request at GATE-02.", view: "command", action: { type: "ARRIVE" }, dialog: "arrival" },
-  { title: "Live pipeline begins", text: "K1-104 enters the physical process while the queue ETA recalculates.", view: "command" },
-  { title: "Quality inspection", text: "Moisture 12.4%, foreign matter 1.8%, Grade A: QC passes.", view: "command", action: { type: "QC" }, dialog: "qc" },
+  { title: "Arrival validation", text: "Validate the farmer at the gate and create a Lot in the backend.", view: "command", dialog: "arrival" },
+  { title: "Live pipeline begins", text: "The Lot enters the physical process.", view: "command" },
+  { title: "Quality inspection", text: "Enter real QC measurements — the backend Rulebook evaluates the grade.", view: "command", dialog: "qc" },
   { title: "Capacity anomaly", text: "WB-04 slows from 12 to 6 farmers per hour.", view: "command", action: { type: "SLOWDOWN" } },
   { title: "AI advises", text: "The advisory forecasts +22 minutes. It does not control procurement.", view: "command" },
   { title: "Rules decide", text: "The rule engine pauses new Call-to-Come releases at 90% utilization.", view: "command" },
-  { title: "Farmer protected from waiting", text: "Ramesh sees 11:05 AM and receives a bilingual capacity alert.", view: "farmer" },
-  { title: "Device weight captured", text: "RS-232 device WB-04 supplies 52.40 kg without manual re-entry.", view: "command", action: { type: "WEIGHT" }, dialog: "weight" },
-  { title: "Procurement transaction", text: "The system creates LOT-2026-0104 and TXN-10482 at Wheat MSP.", view: "command", action: { type: "PROCURE" }, dialog: "procure" },
-  { title: "Payment closes the loop", text: "PAY-10482 is completed and the farmer receives confirmation.", view: "command", action: { type: "PAY" }, dialog: "payment" },
-  { title: "Five-ID accountability", text: "Inspect the tamper-evident chain from FMR-104 through PAY-10482.", view: "trace" },
+  { title: "Farmer protected from waiting", text: "Ramesh sees the revised time and receives a bilingual capacity alert.", view: "farmer" },
+  { title: "Device weight captured", text: "Enter real gross and tare weight — the backend calculates net weight.", view: "command", dialog: "weight" },
+  { title: "Procurement transaction", text: "The backend creates the government procurement at the grade-based price.", view: "command", dialog: "procure" },
+  { title: "Payment closes the loop", text: "Create a real payment and transition it to PAID in the backend.", view: "command", dialog: "payment" },
+  { title: "Five-ID accountability", text: "Inspect the real backend-generated IDs from farmer through payment.", view: "trace" },
   { title: "Government visibility", text: "District officers compare centres and act on bottlenecks, not anecdotes.", view: "government" },
 ];
 
@@ -60,7 +60,8 @@ function KisanShell() {
     dispatch({ type: "DEMO_STEP", step: safe });
     setView(step.view);
     if (step.action) dispatch(step.action);
-    setDialog(null);
+    if (step.dialog) setDialog(step.dialog);
+    else setDialog(null);
   };
   useEffect(() => {
     if (!auto || !demoOpen) return;
@@ -83,7 +84,10 @@ function KisanShell() {
           <div className="ml-auto hidden items-center gap-3 md:flex">
             <StatusPill online={state.online} count={state.queuedActions.length} />
             <span className="h-7 w-px bg-header-border" />
-            <div className="text-right"><p className="text-xs font-semibold">Sehore Procurement Centre</p><p className="text-[10px] text-header-subtle">Madhya Pradesh · Centre MP-SEH-04</p></div>
+            <div className="text-right">
+              <p className="text-xs font-semibold">{state.tx.assignedCentreId ? `Centre: ${state.tx.assignedCentreId}` : "No Centre Assigned"}</p>
+              <p className="text-[10px] text-header-subtle">{state.tx.requestId ? `Request: ${state.tx.requestId}` : "Create a procurement request to begin"}</p>
+            </div>
           </div>
           <Button className="ml-auto bg-demo text-demo-foreground hover:bg-demo/90 md:ml-2" onClick={() => { setDemoOpen(true); goStep(0); }}><Play className="size-4" /><span className="hidden sm:inline">Start Judge Demo</span><span className="sm:hidden">Demo</span></Button>
           <Button aria-label="Open demo controls" title="Demo controls" variant="outline" size="icon" className="border-header-border bg-header-muted text-header-foreground hover:bg-header-muted/80" onClick={() => setControls(true)}><Activity /></Button>
@@ -137,63 +141,126 @@ function Panel({ title, subtitle, children, className }: { title: string; subtit
   return <section className={cn("rounded-md border bg-card shadow-xs", className)}><div className="border-b px-4 py-3"><h2 className="font-bold">{title}</h2>{subtitle && <p className="mt-0.5 text-xs text-muted-foreground">{subtitle}</p>}</div><div className="p-4">{children}</div></section>;
 }
 
+function DemoTag() {
+  return <span className="ml-1 rounded bg-muted px-1.5 py-0.5 text-[9px] font-bold uppercase text-muted-foreground">Demo</span>;
+}
+
+/* ─── Command Centre ───────────────────────────────────────────────────────── */
+
 function CommandCentre({ setDialog }: { setDialog: (d: DialogKind) => void }) {
-  const { state, arrivalWindow, eta, queuePosition, dispatch } = useDemo();
-  const kpis = [["Farmers Today", "142", Users], ["Processed", state.paymentComplete ? "98" : "97", ClipboardCheck], ["In Queue", state.paymentComplete ? "17" : "18", Truck], ["Average Wait", state.bottleneck ? "43 min" : "21 min", Activity], ["Capacity", state.bottleneck ? "91%" : "78%", Gauge]] as const;
+  const { state, dispatch } = useDemo();
+  const tx = state.tx;
+  const kpis = [["Farmers Today", "—", Users], ["Processed", "—", ClipboardCheck], ["In Queue", "—", Truck], ["Average Wait", "—", Activity], ["Capacity", "—", Gauge]] as const;
   return <>
-    <PageHeading eyebrow="Officer Command Centre" title="Sehore Procurement Centre" description="Friday, 11 September 2026 · Wheat procurement shift · OP-07" action={<div className="flex items-center gap-2"><span className={cn("rounded-full px-3 py-1.5 text-xs font-bold", state.bottleneck ? "bg-warning-muted text-warning-foreground" : "bg-success-muted text-success")}>{state.bottleneck ? "Overloaded" : "Operational"}</span><StatusPill online={state.online} count={state.queuedActions.length} /></div>} />
-    <div className="grid grid-cols-2 gap-3 xl:grid-cols-5">{kpis.map(([label, value, Icon]) => <div key={label} className="rounded-md border bg-card p-4 shadow-xs"><div className="flex items-start justify-between"><p className="text-xs font-medium text-muted-foreground">{label}</p><Icon className="size-4 text-primary" /></div><p className="mt-2 text-2xl font-bold">{value}</p></div>)}</div>
+    <PageHeading eyebrow="Officer Command Centre" title={tx.assignedCentreId ?? "No Centre Assigned"} description={tx.requestId ? `Active Request: ${tx.requestId} · Lot: ${tx.lotId ?? "pending"}` : "Create a procurement request to begin"} action={<div className="flex items-center gap-2"><span className={cn("rounded-full px-3 py-1.5 text-xs font-bold", state.bottleneck ? "bg-warning-muted text-warning-foreground" : "bg-success-muted text-success")}>{state.bottleneck ? "Overloaded" : "Operational"}</span><StatusPill online={state.online} count={state.queuedActions.length} /></div>} />
+    <div className="grid grid-cols-2 gap-3 xl:grid-cols-5">{kpis.map(([label, , Icon]) => <div key={label} className="rounded-md border bg-card p-4 shadow-xs"><div className="flex items-start justify-between"><p className="text-xs font-medium text-muted-foreground">{label}<DemoTag /></p><Icon className="size-4 text-primary" /></div><p className="mt-2 text-lg font-bold text-muted-foreground italic">Placeholder</p></div>)}</div>
     <div className="mt-4 grid gap-4 xl:grid-cols-[1.35fr_.65fr]">
-      <Panel title="Live Operational Pipeline" subtitle="Select a stage to move demo request K1-104">
-        <div className="grid grid-cols-3 gap-2 md:grid-cols-6">{stages.map((stage, i) => { const active = stage === state.stage; const done = i < stages.indexOf(state.stage) || (stage === "Payment" && state.paymentComplete); return <Button key={stage} variant="outline" className={cn("h-auto min-h-20 flex-col gap-1 px-2 py-3", active && "border-primary bg-accent ring-2 ring-primary/20", done && "border-success/40 bg-success-muted")} onClick={() => dispatch({ type: "MOVE", stage })}><span className={cn("grid size-6 place-items-center rounded-full text-[11px]", done ? "bg-success text-success-foreground" : active ? "bg-primary text-primary-foreground" : "bg-muted")}>{done ? <Check className="size-3" /> : i + 1}</span><span className="text-xs">{stage}</span><span className="text-[10px] font-normal text-muted-foreground">{[4,7,11,9,6,3][i]} active</span></Button>})}</div>
-        <div className="mt-4 flex flex-wrap items-center gap-2 rounded-md border border-primary/20 bg-accent p-3"><span className="rounded bg-primary px-2 py-1 text-xs font-bold text-primary-foreground">#{queuePosition}</span><strong className="text-sm">K1-104 · Ramesh Kumar</strong><ArrowRight className="size-4 text-muted-foreground"/><span className="text-sm">{state.stage}</span><span className="ml-auto text-sm font-bold">ETA {eta} min</span></div>
-        <div className="mt-3 flex flex-wrap gap-2"><Button size="sm" variant="outline" onClick={() => setDialog("arrival")}><ScanLine />Validate arrival</Button><Button size="sm" variant="outline" onClick={() => setDialog("qc")}><ClipboardCheck />QC inspection</Button><Button size="sm" variant="outline" onClick={() => setDialog("weight")}><Scale />Weighment</Button><Button size="sm" variant="outline" onClick={() => setDialog("procure")}><Warehouse />Procure</Button><Button size="sm" variant="outline" onClick={() => setDialog("payment")}><IndianRupee />Payment</Button></div>
+      <Panel title="Live Operational Pipeline" subtitle="Real backend operations — click buttons to perform each step">
+        <div className="grid grid-cols-3 gap-2 md:grid-cols-6">{stages.map((stage, i) => { const active = stage === state.stage; const done = i < stages.indexOf(state.stage) || (stage === "Payment" && state.paymentComplete); return <Button key={stage} variant="outline" className={cn("h-auto min-h-20 flex-col gap-1 px-2 py-3", active && "border-primary bg-accent ring-2 ring-primary/20", done && "border-success/40 bg-success-muted")} onClick={() => dispatch({ type: "MOVE", stage })}><span className={cn("grid size-6 place-items-center rounded-full text-[11px]", done ? "bg-success text-success-foreground" : active ? "bg-primary text-primary-foreground" : "bg-muted")}>{done ? <Check className="size-3" /> : i + 1}</span><span className="text-xs">{stage}</span></Button>})}</div>
+        {tx.requestId && <div className="mt-4 flex flex-wrap items-center gap-2 rounded-md border border-primary/20 bg-accent p-3">
+          <strong className="text-sm">{tx.farmerName ?? tx.farmerId ?? "—"}</strong><ArrowRight className="size-4 text-muted-foreground"/><span className="text-sm">{state.stage}</span>
+          {tx.qcGrade && <span className={cn("rounded-full px-2 py-0.5 text-xs font-bold", tx.qcGrade === "F" ? "bg-destructive/10 text-destructive" : "bg-success-muted text-success")}>Grade {tx.qcGrade}</span>}
+          {tx.netWeightKg != null && <span className="text-xs text-muted-foreground">{tx.netWeightKg} kg</span>}
+          {tx.grossAmount != null && <span className="ml-auto text-sm font-bold">₹{tx.grossAmount.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</span>}
+        </div>}
+        <div className="mt-3 flex flex-wrap gap-2">
+          <Button size="sm" variant="outline" onClick={() => setDialog("booking")}><Sprout />Book Request</Button>
+          <Button size="sm" variant="outline" onClick={() => setDialog("arrival")} disabled={!tx.requestId}><ScanLine />Validate Arrival</Button>
+          <Button size="sm" variant="outline" onClick={() => setDialog("qc")} disabled={!tx.lotId}><ClipboardCheck />QC Inspection</Button>
+          <Button size="sm" variant="outline" onClick={() => setDialog("weight")} disabled={!tx.lotId}><Scale />Weighment</Button>
+          <Button size="sm" variant="outline" onClick={() => setDialog("procure")} disabled={!tx.weighmentId || !tx.qcAttemptId}><Warehouse />Procure</Button>
+          <Button size="sm" variant="outline" onClick={() => setDialog("payment")} disabled={!tx.procurementId}><IndianRupee />Payment</Button>
+        </div>
       </Panel>
-      <Panel title="Dynamic Call-to-Come" subtitle="Rule-controlled farmer release">
-        <div className="flex items-center justify-between"><div><p className={cn("text-xl font-bold", state.bottleneck ? "text-warning-foreground" : "text-success")}>{state.bottleneck ? "PAUSED" : "ACTIVE"}</p><p className="text-xs text-muted-foreground">{state.bottleneck ? "Capacity safety rule engaged" : "Release cadence healthy"}</p></div><div className={cn("grid size-11 place-items-center rounded-full", state.bottleneck ? "bg-warning-muted" : "bg-success-muted")}>{state.bottleneck ? <Pause className="text-warning-foreground"/> : <Play className="text-success"/>}</div></div>
-        <div className="mt-5 grid grid-cols-2 gap-3 text-sm"><Metric label="Next release" value={state.bottleneck ? "On hold" : "10:48 AM"}/><Metric label="Arrival window" value={arrivalWindow.split(" – ")[0] ?? arrivalWindow}/><Metric label="Farmers released" value="6"/><Metric label="Waiting at home" value="12"/></div>
+      <Panel title="Transaction Summary" subtitle="Real backend data from current flow">
+        <div className="space-y-2 text-sm">
+          <TxRow label="Request" value={tx.requestId} />
+          <TxRow label="Centre" value={tx.assignedCentreId} />
+          <TxRow label="Slot" value={tx.assignedSlotId} />
+          <TxRow label="Lot" value={tx.lotId} />
+          <TxRow label="QC" value={tx.qcAttemptId ? `${tx.qcAttemptId} · ${tx.qcGrade} · ${tx.qcDecision}` : null} />
+          <TxRow label="Price" value={tx.qcPricePerKg != null ? `₹${tx.qcPricePerKg}/kg` : null} />
+          <TxRow label="Weighment" value={tx.weighmentId ? `${tx.weighmentId} · ${tx.netWeightKg} kg net` : null} />
+          <TxRow label="Procurement" value={tx.procurementId ? `${tx.procurementId} · ₹${tx.grossAmount?.toLocaleString("en-IN", { minimumFractionDigits: 2 })}` : null} />
+          <TxRow label="Payment" value={tx.paymentId ? `${tx.paymentId} · ${tx.paymentStatus}` : null} />
+        </div>
       </Panel>
     </div>
     <div className="mt-4 grid gap-4 xl:grid-cols-[1.1fr_.9fr]">
       <CapacityPanel />
       <div className="space-y-4"><DecisionPanel /><Events /></div>
     </div>
-    <div className="mt-4"><QueueTable /></div>
   </>;
+}
+
+function TxRow({ label, value }: { label: string; value: string | null | undefined }) {
+  return <div className="flex justify-between border-b pb-1 last:border-0"><span className="text-muted-foreground">{label}</span><span className={cn("font-mono text-xs", value ? "text-foreground" : "text-muted-foreground italic")}>{value ?? "—"}</span></div>;
 }
 
 function Metric({ label, value }: { label: string; value: string }) { return <div className="rounded-md bg-muted p-3"><p className="text-[11px] text-muted-foreground">{label}</p><p className="mt-1 font-bold">{value}</p></div>; }
 
 function CapacityPanel() {
   const { state } = useDemo(); const rows = [["Gate",78,"14/hr"],["QC",71,"11/hr"],["Weighment",state.bottleneck?94:76,state.bottleneck?"6/hr":"12/hr"],["Unloading",62,"9/hr"],["Storage",48,"240 MT"]] as const;
-  return <Panel title="Capacity Intelligence Engine" subtitle="Live capacity utilization and limiting-resource detection"><div className="space-y-4">{rows.map(([name,value,rate]) => <div key={name}><div className="mb-1.5 flex items-center justify-between text-xs"><span className="font-semibold">{name}</span><span className={cn("font-bold", value >= 90 && "text-warning-foreground")}>{value}% · {rate}</span></div><div className="h-2 overflow-hidden rounded-full bg-muted"><div className={cn("h-full rounded-full transition-all duration-700", value >= 90 ? "bg-warning" : value >= 75 ? "bg-primary" : "bg-success")} style={{ width: `${value}%` }}/></div>{value >= 90 && <p className="mt-1 flex items-center gap-1 text-[11px] font-bold text-warning-foreground"><AlertTriangle className="size-3"/>Warning · limiting resource</p>}</div>)}</div></Panel>;
+  return <Panel title="Capacity Intelligence Engine" subtitle="Demo / Placeholder — backend aggregate unavailable"><div className="space-y-4">{rows.map(([name,value,rate]) => <div key={name}><div className="mb-1.5 flex items-center justify-between text-xs"><span className="font-semibold">{name}<DemoTag /></span><span className={cn("font-bold", value >= 90 && "text-warning-foreground")}>{value}% · {rate}</span></div><div className="h-2 overflow-hidden rounded-full bg-muted"><div className={cn("h-full rounded-full transition-all duration-700", value >= 90 ? "bg-warning" : value >= 75 ? "bg-primary" : "bg-success")} style={{ width: `${value}%` }}/></div>{value >= 90 && <p className="mt-1 flex items-center gap-1 text-[11px] font-bold text-warning-foreground"><AlertTriangle className="size-3"/>Warning · limiting resource</p>}</div>)}</div></Panel>;
 }
 
 function DecisionPanel() {
   const { state } = useDemo();
-  return <Panel title="Decision Intelligence" subtitle="Forecast separately from operational control"><div className="grid gap-3 sm:grid-cols-2"><div className={cn("rounded-md border-l-4 p-3", state.bottleneck ? "border-warning bg-warning-muted" : "border-info bg-info-muted")}><p className="text-[10px] font-bold uppercase">AI Advisory</p><p className="mt-1 text-sm font-bold">{state.bottleneck ? "Weighbridge risk detected" : "No critical risk detected"}</p><p className="mt-1 text-xs text-muted-foreground">{state.bottleneck ? "+22 min projected impact" : "Load remains within plan"}</p></div><div className={cn("rounded-md border-l-4 p-3", state.bottleneck ? "border-warning bg-warning-muted" : "border-success bg-success-muted")}><p className="text-[10px] font-bold uppercase">Rule Engine Decision</p><p className="mt-1 text-sm font-bold">{state.bottleneck ? "PAUSE CALL-TO-COME" : "CONTINUE RELEASES"}</p><p className="mt-1 text-xs text-muted-foreground">Rule CAP-WB-90 · auditable</p></div></div></Panel>;
+  return <Panel title="Decision Intelligence" subtitle="Demo / Placeholder — backend aggregate unavailable"><div className="grid gap-3 sm:grid-cols-2"><div className={cn("rounded-md border-l-4 p-3", state.bottleneck ? "border-warning bg-warning-muted" : "border-info bg-info-muted")}><p className="text-[10px] font-bold uppercase">AI Advisory<DemoTag /></p><p className="mt-1 text-sm font-bold">{state.bottleneck ? "Weighbridge risk detected" : "No critical risk detected"}</p><p className="mt-1 text-xs text-muted-foreground">{state.bottleneck ? "+22 min projected impact" : "Load remains within plan"}</p></div><div className={cn("rounded-md border-l-4 p-3", state.bottleneck ? "border-warning bg-warning-muted" : "border-success bg-success-muted")}><p className="text-[10px] font-bold uppercase">Rule Engine Decision<DemoTag /></p><p className="mt-1 text-sm font-bold">{state.bottleneck ? "PAUSE CALL-TO-COME" : "CONTINUE RELEASES"}</p><p className="mt-1 text-xs text-muted-foreground">Rule CAP-WB-90 · auditable</p></div></div></Panel>;
 }
 
-function Events() { const { state } = useDemo(); return <Panel title="Recent Events"><div className="space-y-2">{state.events.slice(0,5).map((event, i) => <div key={`${event.time}-${i}`} className="flex gap-3 text-xs"><span className="font-mono text-muted-foreground">{event.time}</span><span className={cn("size-2 shrink-0 rounded-full mt-1", event.tone === "success" ? "bg-success" : event.tone === "warning" ? "bg-warning" : "bg-info")}/><span>{event.text}</span></div>)}</div></Panel>; }
+function Events() { const { state } = useDemo(); return <Panel title="Recent Events">{state.events.length === 0 ? <p className="text-sm text-muted-foreground italic">No events yet. Start a procurement flow.</p> : <div className="space-y-2">{state.events.slice(0,5).map((event, i) => <div key={`${event.time}-${i}`} className="flex gap-3 text-xs"><span className="font-mono text-muted-foreground">{event.time}</span><span className={cn("size-2 shrink-0 rounded-full mt-1", event.tone === "success" ? "bg-success" : event.tone === "warning" ? "bg-warning" : "bg-info")}/><span>{event.text}</span></div>)}</div>}</Panel>; }
 
-function QueueTable() {
-  const { state, arrivalWindow, eta, queuePosition } = useDemo(); const rows = [
-    ["1","Savitri Bai","K1-101","10:30–10:45","Weighment","8 min","In process"],
-    ["2","Mohan Patel","K1-102","10:30–10:45","QC","12 min","In process"],
-    [String(queuePosition),"Ramesh Kumar","K1-104",arrivalWindow.replaceAll(" AM", ""),state.stage,`${eta} min`,state.bottleneck?"Recalculated":"On time"],
-    ["5","Asha Verma","K1-107",state.bottleneck?"11:05–11:20":"10:55–11:10","Called",state.bottleneck?"46 min":"24 min",state.bottleneck?"Delayed":"Released"],
-  ];
-  return <Panel title="Live Queue" subtitle="ETAs recalculate from throughput, current stage and farmer arrival"><div className="overflow-x-auto"><table className="w-full min-w-[760px] text-left text-sm"><thead className="border-b bg-muted/60 text-[11px] uppercase text-muted-foreground"><tr>{["Position","Farmer","Request ID","Arrival Window","Stage","ETA","Status"].map(h=><th className="px-3 py-2" key={h}>{h}</th>)}</tr></thead><tbody>{rows.map(row=><tr key={row[2]} className={cn("border-b last:border-0",row[2]==="K1-104"&&"bg-accent")} >{row.map((cell,i)=><td key={i} className={cn("px-3 py-3",i===0||i===2?"font-bold":"", i===6&&"text-primary")}>{cell}{row[2]==="K1-104"&&i===5&&state.bottleneck?<span className="ml-2 inline-block size-1.5 animate-pulse rounded-full bg-warning"/>:null}</td>)}</tr>)}</tbody></table></div></Panel>;
-}
+/* ─── Farmer Experience ────────────────────────────────────────────────────── */
 
 function FarmerExperience({ setDialog }: { setDialog: (d: DialogKind) => void }) {
-  const { state, arrivalWindow, eta, queuePosition, gross } = useDemo();
-  return <div className="mx-auto max-w-5xl"><PageHeading eyebrow="Farmer Experience · किसान सेवा" title="Namaste, Ramesh Kumar" description="FMR-104 · Wheat · Sehore Procurement Centre" action={<Button onClick={() => setDialog("booking")}><Sprout/>Book Procurement</Button>} />
-    {state.bottleneck && <div className="mb-4 flex gap-3 rounded-md border border-warning/40 bg-warning-muted p-4 text-sm"><AlertTriangle className="size-5 shrink-0 text-warning-foreground"/><div><p className="font-bold">Capacity slowdown · क्षमता में देरी</p><p className="mt-1 text-muted-foreground">Your centre arrival has moved to 11:05 AM. Please do not leave early. / कृपया 11:05 बजे आएं।</p></div></div>}
-    <section className="overflow-hidden rounded-md border bg-card shadow-sm"><div className="bg-primary px-5 py-4 text-primary-foreground"><div className="flex items-center justify-between"><div><p className="text-xs font-semibold opacity-80">CALL-TO-COME · K1-104</p><h2 className="mt-1 text-xl font-bold">Your centre is ready for you</h2></div><Bell className="size-6"/></div></div><div className="p-5"><p className="text-xs font-bold uppercase text-muted-foreground">आगमन समय / Arrival Window</p><p className="mt-1 text-3xl font-bold text-primary">{arrivalWindow}</p><div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4"><Metric label="कतार / Queue" value={`#${queuePosition}`}/><Metric label="अनुमानित प्रतीक्षा / Est. Wait" value={`${eta} min`}/><Metric label="फसल / Crop" value="Wheat"/><Metric label="मात्रा / Quantity" value="52.4 kg"/></div><div className="mt-4 rounded-md bg-success-muted p-3 text-sm text-success"><strong>Advice:</strong> Bring Aadhaar and bank passbook. Reach only within your issued window.</div></div></section>
-    <div className="mt-4 grid gap-4 md:grid-cols-2"><Panel title="Live Queue Tracking" subtitle="Updates automatically from centre operations"><div className="space-y-3">{stages.map((s,i)=><div key={s} className="flex items-center gap-3"><span className={cn("grid size-7 place-items-center rounded-full text-xs",i<stages.indexOf(state.stage)||(s==="Payment"&&state.paymentComplete)?"bg-success text-success-foreground":s===state.stage?"bg-primary text-primary-foreground":"bg-muted text-muted-foreground")}>{i<stages.indexOf(state.stage)?<Check className="size-3"/>:i+1}</span><span className={cn("text-sm",s===state.stage&&"font-bold")}>{s}</span>{s===state.stage&&<span className="ml-auto text-xs text-primary">Current stage</span>}</div>)}</div></Panel><Panel title="Payment & Transaction History"><div className="rounded-md border p-4"><div className="flex items-start justify-between"><div><p className="font-bold">TXN-10482</p><p className="text-xs text-muted-foreground">LOT-2026-0104 · Wheat Grade A</p></div><span className={cn("rounded-full px-2 py-1 text-xs font-bold",state.paymentComplete?"bg-success-muted text-success":"bg-muted")}>{state.paymentComplete?"Paid":"Pending"}</span></div><div className="mt-4 flex justify-between border-t pt-3"><span className="text-sm text-muted-foreground">Net amount</span><strong>₹{gross.toLocaleString("en-IN",{minimumFractionDigits:2})}</strong></div></div></Panel></div>
+  const { state } = useDemo();
+  const tx = state.tx;
+  return <div className="mx-auto max-w-5xl">
+    <PageHeading eyebrow="Farmer Experience · किसान सेवा" title={tx.farmerName ? `Namaste, ${tx.farmerName}` : "Welcome to KisanOne"} description={tx.requestId ? `${tx.farmerId} · ${tx.cropCode ?? "—"} · ${tx.assignedCentreId ?? "—"}` : "Create a procurement request to begin"} action={<Button onClick={() => setDialog("booking")}><Sprout/>Book Procurement</Button>} />
+    {state.bottleneck && <div className="mb-4 flex gap-3 rounded-md border border-warning/40 bg-warning-muted p-4 text-sm"><AlertTriangle className="size-5 shrink-0 text-warning-foreground"/><div><p className="font-bold">Capacity slowdown · क्षमता में देरी</p><p className="mt-1 text-muted-foreground">Your centre arrival has been delayed. Please do not leave early. / कृपया देरी से आएं।</p></div></div>}
+    {tx.requestId ? (
+      <section className="overflow-hidden rounded-md border bg-card shadow-sm">
+        <div className="bg-primary px-5 py-4 text-primary-foreground">
+          <div className="flex items-center justify-between"><div><p className="text-xs font-semibold opacity-80">PROCUREMENT REQUEST · {tx.requestId}</p><h2 className="mt-1 text-xl font-bold">Your centre is ready for you</h2></div><Bell className="size-6"/></div>
+        </div>
+        <div className="p-5">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <Metric label="Farmer / किसान" value={tx.farmerName ?? tx.farmerId ?? "—"} />
+            <Metric label="Centre / केंद्र" value={tx.assignedCentreId ?? "—"} />
+            <Metric label="Crop / फसल" value={tx.cropCode ?? "—"} />
+            <Metric label="Quantity / मात्रा" value={tx.expectedQuantityKg ? `${tx.expectedQuantityKg} kg` : "—"} />
+          </div>
+          {tx.assignedSlotId && <div className="mt-4 rounded-md bg-success-muted p-3 text-sm text-success"><strong>Slot Assigned:</strong> {tx.assignedSlotId} · Centre: {tx.assignedCentreId}</div>}
+        </div>
+      </section>
+    ) : (
+      <section className="overflow-hidden rounded-md border bg-card shadow-sm p-8 text-center">
+        <Sprout className="mx-auto size-12 text-muted-foreground" />
+        <h2 className="mt-4 text-xl font-bold">No active request</h2>
+        <p className="mt-2 text-sm text-muted-foreground">Click "Book Procurement" to create a real procurement request.</p>
+      </section>
+    )}
+    <div className="mt-4 grid gap-4 md:grid-cols-2">
+      <Panel title="Live Pipeline Tracking" subtitle="Updates from real backend operations">
+        <div className="space-y-3">{stages.map((s,i)=><div key={s} className="flex items-center gap-3"><span className={cn("grid size-7 place-items-center rounded-full text-xs",i<stages.indexOf(state.stage)||(s==="Payment"&&state.paymentComplete)?"bg-success text-success-foreground":s===state.stage?"bg-primary text-primary-foreground":"bg-muted text-muted-foreground")}>{i<stages.indexOf(state.stage)?<Check className="size-3"/>:i+1}</span><span className={cn("text-sm",s===state.stage&&"font-bold")}>{s}</span>{s===state.stage&&<span className="ml-auto text-xs text-primary">Current stage</span>}</div>)}</div>
+      </Panel>
+      <Panel title="Payment & Transaction History">
+        {tx.procurementId ? (
+          <div className="rounded-md border p-4">
+            <div className="flex items-start justify-between"><div><p className="font-bold">{tx.procurementId}</p><p className="text-xs text-muted-foreground">{tx.lotId} · {tx.cropCode} Grade {tx.qcGrade ?? "—"}</p></div><span className={cn("rounded-full px-2 py-1 text-xs font-bold", tx.paymentStatus === "PAID" ? "bg-success-muted text-success" : "bg-muted")}>{tx.paymentStatus ?? "Pending"}</span></div>
+            <div className="mt-4 flex justify-between border-t pt-3"><span className="text-sm text-muted-foreground">Gross amount</span><strong>₹{tx.grossAmount?.toLocaleString("en-IN", { minimumFractionDigits: 2 }) ?? "—"}</strong></div>
+            {tx.payableAmount != null && <div className="flex justify-between border-t pt-3 mt-2"><span className="text-sm text-muted-foreground">Payable amount</span><strong>₹{tx.payableAmount.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</strong></div>}
+          </div>
+        ) : (
+          <p className="text-sm text-muted-foreground italic">No procurement transaction yet. Complete the pipeline to see real payment data.</p>
+        )}
+      </Panel>
+    </div>
   </div>;
 }
+
+/* ─── IVR Simulator — FROZEN · DO NOT MODIFY ──────────────────────────────── */
 
 function IvrSimulator() {
   const { state, arrivalWindow, eta, queuePosition } = useDemo(); const [digits,setDigits]=useState(""); const [transcript,setTranscript]=useState("Welcome to KisanOne. किसानवन में आपका स्वागत है। Press 1 for request status, 2 for arrival time, 3 for queue position."); const [speaking,setSpeaking]=useState(false);
@@ -204,41 +271,98 @@ function IvrSimulator() {
   return <><PageHeading eyebrow="Inclusive access" title="IVR & SMS Simulator" description="The same live data for feature phones, voice and text channels"/><div className="grid gap-4 lg:grid-cols-[.8fr_1.2fr]"><Panel title="KisanOne IVR · 1800-11-26032" subtitle="Accessible DTMF telephone simulation"><div className="mx-auto max-w-xs"><div className="rounded-md bg-header p-4 text-header-foreground"><p className="text-xs text-header-subtle">LIVE TRANSCRIPT</p><p aria-live="polite" className="mt-2 min-h-24 text-sm leading-relaxed">{transcript}</p><p className="mt-3 text-right font-mono text-lg">{digits||"—"}</p></div><div className="mt-3 grid grid-cols-3 gap-2">{["1","2","3","4","5","6","7","8","9","*","0","#"].map(k=><Button key={k} variant="outline" className="h-14 text-lg" aria-label={`Press ${k}`} onClick={()=>press(k)}>{k}{["1","2","3"].includes(k)&&<span className="text-[9px] text-muted-foreground">{k==="1"?"Status":k==="2"?"Window":"Queue"}</span>}</Button>)}</div><div className="mt-3 flex gap-2"><Button className="flex-1" onClick={()=>speak()} disabled={speaking}><Play/>{speaking?"Playing":"Play voice"}</Button><Button variant="outline" onClick={stop}><X/>Stop</Button></div></div></Panel><Panel title="SMS Alert Stream" subtitle={`${state.sms.length} messages sent to Ramesh Kumar · ••••••4210`}><div className="space-y-3">{[...state.sms].reverse().map((sms,i)=><div key={`${sms}-${i}`} className="flex gap-3 rounded-md border bg-muted/40 p-3"><MessageSquareText className="size-5 shrink-0 text-primary"/><div><p className="text-sm">{sms}</p><p className="mt-1 text-[10px] text-muted-foreground">Delivered · {i===0?"just now":"10:39 AM"}</p></div></div>)}</div></Panel></div></>;
 }
 
+/* ─── Traceability ─────────────────────────────────────────────────────────── */
+
 function Traceability() {
-  const { state } = useDemo(); const [selected,setSelected]=useState(0); const nodes: [string,string,string,string,string,string][]=[
-    ["Farmer","FMR-104","Ramesh Kumar","Registry","VERIFIED","9d0c…7ae1"], ["Request","K1-104","OP-07","WEB-PORTAL","APPROVED","a42b…1fc8"], ["Lot","LOT-2026-0104","OP-07","WB-04",state.procurementComplete?"CREATED":"PENDING","2b7e…90dd"], ["Transaction","TXN-10482","OP-07","PROC-02",state.procurementComplete?"POSTED":"PENDING","f510…20ac"], ["Payment","PAY-10482","PFMS","BANK-API",state.paymentComplete?"SETTLED":"PENDING","7c21…bf09"]
-  ]; const n=nodes[selected] ?? nodes[0];
+  const { state } = useDemo();
+  const tx = state.tx;
+  const [selected,setSelected]=useState(0);
+  const nodes: [string,string,string,string][] = [
+    ["Farmer", tx.farmerId ?? "—", tx.farmerName ?? "—", tx.farmerId ? "VERIFIED" : "PENDING"],
+    ["Request", tx.requestId ?? "—", tx.assignedCentreId ?? "—", tx.requestId ? "APPROVED" : "PENDING"],
+    ["Lot", tx.lotId ?? "—", tx.cropCode ?? "—", tx.lotId ? "CREATED" : "PENDING"],
+    ["Procurement", tx.procurementId ?? "—", tx.qcGrade ? `Grade ${tx.qcGrade}` : "—", tx.procurementId ? "POSTED" : "PENDING"],
+    ["Payment", tx.paymentId ?? "—", tx.paymentStatus ?? "—", tx.paymentStatus === "PAID" ? "SETTLED" : "PENDING"],
+  ];
+  const n = nodes[selected] ?? nodes[0];
   if (!n) return null;
-  return <><PageHeading eyebrow="End-to-end accountability" title="Five-ID Traceability" description="One inspectable chain from farmer identity to final payment"/><Panel title="Tamper-evident procurement chain" subtitle="Select any node to inspect its audit evidence"><div className="flex flex-col items-stretch gap-2 lg:flex-row lg:items-center">{nodes.map((node,i)=><div key={node[1]} className="contents"><Button variant="outline" className={cn("h-auto min-h-24 flex-1 flex-col",selected===i&&"border-primary bg-accent ring-2 ring-primary/20")} onClick={()=>setSelected(i)}><span className="text-[10px] uppercase text-muted-foreground">{node[0]}</span><strong>{node[1]}</strong><span className={cn("text-[10px]",node[4]==="PENDING"?"text-muted-foreground":"text-success")}>{node[4]}</span></Button>{i<nodes.length-1&&<ArrowRight className="mx-auto size-4 rotate-90 text-muted-foreground lg:rotate-0"/>}</div>)}</div></Panel><div className="mt-4 grid gap-4 md:grid-cols-[1fr_.7fr]"><Panel title={`${n[0]} evidence · ${n[1]}`}><dl className="grid grid-cols-2 gap-4 text-sm"><Detail label="Created By" value={n[2]}/><Detail label="Timestamp" value={selected<2?"11 Sep 2026, 10:39":"11 Sep 2026, 10:52"}/><Detail label="Operator" value={selected===0?"Citizen Registry":n[2]}/><Detail label="Device" value={n[3]}/><Detail label="Status" value={n[4]}/><Detail label="Centre" value="MP-SEH-04"/></dl></Panel><Panel title="SHA-256 Demo Hash"><div className="rounded-md bg-header p-4 font-mono text-sm text-header-foreground"><p className="break-all">{n[5]}c8481fdd2b27e479a6b0f13c98e4073512</p></div><p className="mt-3 flex items-center gap-2 text-xs text-success"><ShieldCheck className="size-4"/>Previous hash linked · integrity verified</p></Panel></div></>;
+  return <>
+    <PageHeading eyebrow="End-to-end accountability" title="Five-ID Traceability" description="Real backend-generated IDs from farmer identity to final payment"/>
+    <Panel title="Procurement chain" subtitle="Select any node to inspect — IDs are from the real backend">
+      <div className="flex flex-col items-stretch gap-2 lg:flex-row lg:items-center">{nodes.map((node,i)=><div key={node[1]+i} className="contents"><Button variant="outline" className={cn("h-auto min-h-24 flex-1 flex-col",selected===i&&"border-primary bg-accent ring-2 ring-primary/20")} onClick={()=>setSelected(i)}><span className="text-[10px] uppercase text-muted-foreground">{node[0]}</span><strong className="text-xs">{node[1]}</strong><span className={cn("text-[10px]",node[3]==="PENDING"?"text-muted-foreground":"text-success")}>{node[3]}</span></Button>{i<nodes.length-1&&<ArrowRight className="mx-auto size-4 rotate-90 text-muted-foreground lg:rotate-0"/>}</div>)}</div>
+    </Panel>
+    <div className="mt-4 grid gap-4 md:grid-cols-[1fr_.7fr]">
+      <Panel title={`${n[0]} · ${n[1]}`}>
+        <dl className="grid grid-cols-2 gap-4 text-sm">
+          <Detail label="Entity" value={n[0]}/>
+          <Detail label="ID" value={n[1]}/>
+          <Detail label="Detail" value={n[2]}/>
+          <Detail label="Status" value={n[3]}/>
+          {n[0] === "Procurement" && tx.grossAmount != null && <Detail label="Amount" value={`₹${tx.grossAmount.toLocaleString("en-IN", { minimumFractionDigits: 2 })}`}/>}
+          {n[0] === "Payment" && tx.payableAmount != null && <Detail label="Payable" value={`₹${tx.payableAmount.toLocaleString("en-IN", { minimumFractionDigits: 2 })}`}/>}
+        </dl>
+      </Panel>
+      <Panel title="ID Chain">
+        <div className="space-y-2 text-xs font-mono">
+          <p>farmerId: {tx.farmerId ?? "—"}</p>
+          <p>requestId: {tx.requestId ?? "—"}</p>
+          <p>lotId: {tx.lotId ?? "—"}</p>
+          <p>qcAttemptId: {tx.qcAttemptId ?? "—"}</p>
+          <p>weighmentId: {tx.weighmentId ?? "—"}</p>
+          <p>procurementId: {tx.procurementId ?? "—"}</p>
+          <p>paymentId: {tx.paymentId ?? "—"}</p>
+        </div>
+        {tx.paymentId && <p className="mt-3 flex items-center gap-2 text-xs text-success"><ShieldCheck className="size-4"/>Complete chain — all IDs from real backend</p>}
+      </Panel>
+    </div>
+  </>;
 }
 
 function Detail({label,value}:{label:string;value:string}) { return <div><dt className="text-xs text-muted-foreground">{label}</dt><dd className="mt-1 font-semibold">{value}</dd></div>; }
 
+/* ─── Government Dashboard ─────────────────────────────────────────────────── */
+
 function GovernmentDashboard() {
-  const { state }=useDemo(); const centres=[["Sehore",state.bottleneck?94:78,"142",state.bottleneck?"Weighment":"Healthy"],["Bhopal",68,"218","Healthy"],["Raisen",84,"176","QC pressure"],["Vidisha",57,"131","Healthy"]] as const;
-  return <><PageHeading eyebrow="Government monitoring" title="Sehore District & Madhya Pradesh" description="Procurement performance, centre comparison and emerging bottlenecks"/><div className="grid grid-cols-2 gap-3 lg:grid-cols-4"><GovKpi label="Procured today" value="1,284 MT" change="+8.4% vs plan"/><GovKpi label="Farmers served" value={state.paymentComplete?"4,829":"4,828"} change="91% on time"/><GovKpi label="Avg. wait" value={state.bottleneck?"29 min":"23 min"} change="Target <30 min"/><GovKpi label="Active centres" value="38 / 42" change="4 planned closure"/></div><div className="mt-4 grid gap-4 lg:grid-cols-[1.25fr_.75fr]"><Panel title="Peer Centre Comparison" subtitle="Live utilization across nearby procurement centres"><div className="space-y-3">{centres.map(([name,value,farmers,status])=><div key={name} className="grid grid-cols-[80px_1fr_52px] items-center gap-3"><div><p className="text-sm font-bold">{name}</p><p className="text-[10px] text-muted-foreground">{farmers} farmers</p></div><div><div className="h-3 overflow-hidden rounded-full bg-muted"><div className={cn("h-full",value>=90?"bg-warning":value>=80?"bg-info":"bg-success")} style={{width:`${value}%`}}/></div><p className="mt-1 text-[10px] text-muted-foreground">{status}</p></div><strong className="text-right text-sm">{value}%</strong></div>)}</div></Panel><Panel title="District Alerts" subtitle="Prioritized by operational impact"><div className="space-y-3">{state.bottleneck&&<AlertItem level="Critical" text="Sehore WB-04 at 94%; releases paused"/>}<AlertItem level="Watch" text="Raisen QC utilization at 84%"/><AlertItem level="Info" text="Bhopal on-time rate improved 6%"/></div></Panel></div><div className="mt-4 grid gap-4 md:grid-cols-3"><Panel title="Commodity Mix"><p className="text-3xl font-bold">62%</p><p className="text-xs text-muted-foreground">Wheat · 796 MT</p><div className="mt-3 h-2 rounded-full bg-muted"><div className="h-full w-[62%] rounded-full bg-brand"/></div></Panel><Panel title="Payments"><p className="text-3xl font-bold">₹4.8 Cr</p><p className="text-xs text-muted-foreground">96.2% settled within SLA</p></Panel><Panel title="Storage Readiness"><p className="text-3xl font-bold">71%</p><p className="text-xs text-muted-foreground">8,420 MT district capacity free</p></Panel></div></>;
+  return <>
+    <PageHeading eyebrow="Government monitoring" title="District Dashboard" description="Demo / Placeholder — backend does not yet provide aggregate metrics"/>
+    <div className="rounded-md border border-info/30 bg-info-muted p-4 mb-4 text-sm text-info">
+      <strong>Note:</strong> The values below are demo placeholders. The backend does not currently provide aggregate dashboard metrics. Individual transaction data uses real backend IDs.
+    </div>
+    <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <GovKpi label="Procured today" value="—" change="Demo placeholder"/>
+      <GovKpi label="Farmers served" value="—" change="Demo placeholder"/>
+      <GovKpi label="Avg. wait" value="—" change="Demo placeholder"/>
+      <GovKpi label="Active centres" value="—" change="Demo placeholder"/>
+    </div>
+    <div className="mt-4 grid gap-4 lg:grid-cols-[1.25fr_.75fr]">
+      <Panel title="Peer Centre Comparison" subtitle="Demo / Placeholder — backend aggregate unavailable">
+        <p className="text-sm text-muted-foreground italic">Centre comparison data requires backend aggregate endpoints not yet implemented.</p>
+      </Panel>
+      <Panel title="District Alerts" subtitle="Demo / Placeholder">
+        <p className="text-sm text-muted-foreground italic">Alert aggregation requires backend endpoints not yet implemented.</p>
+      </Panel>
+    </div>
+    <div className="mt-4 grid gap-4 md:grid-cols-3">
+      <Panel title="Commodity Mix"><p className="text-sm text-muted-foreground italic">Demo placeholder<DemoTag /></p></Panel>
+      <Panel title="Payments"><p className="text-sm text-muted-foreground italic">Demo placeholder<DemoTag /></p></Panel>
+      <Panel title="Storage Readiness"><p className="text-sm text-muted-foreground italic">Demo placeholder<DemoTag /></p></Panel>
+    </div>
+  </>;
 }
 
-function GovKpi({label,value,change}:{label:string;value:string;change:string}) { return <div className="rounded-md border bg-card p-4"><p className="text-xs text-muted-foreground">{label}</p><p className="mt-2 text-xl font-bold sm:text-2xl">{value}</p><p className="mt-1 text-[10px] text-success">{change}</p></div>; }
-function AlertItem({level,text}:{level:string;text:string}) { return <div className="flex gap-3 rounded-md border p-3"><AlertTriangle className={cn("size-4 shrink-0",level==="Critical"?"text-warning-foreground":"text-info")}/><div><p className="text-[10px] font-bold uppercase text-muted-foreground">{level}</p><p className="mt-0.5 text-xs font-medium">{text}</p></div></div>; }
+function GovKpi({label,value,change}:{label:string;value:string;change:string}) { return <div className="rounded-md border bg-card p-4"><p className="text-xs text-muted-foreground">{label}<DemoTag /></p><p className="mt-2 text-xl font-bold sm:text-2xl text-muted-foreground">{value}</p><p className="mt-1 text-[10px] text-muted-foreground italic">{change}</p></div>; }
+
+/* ─── Demo Controls & Judge Demo ───────────────────────────────────────────── */
 
 function DemoControls({open,onOpenChange,setDialog}:{open:boolean;onOpenChange:(v:boolean)=>void;setDialog:(d:DialogKind)=>void}) {
-  const {state,dispatch}=useDemo(); const actions:{label:string;icon:ComponentType<{className?:string}>;action:DemoAction;dialog?:DialogKind}[]=[
-    ["Reset Demo",RotateCcw,{type:"RESET"}], ["Simulate Farmer Request",UserRound,{type:"REQUEST"},"booking"], ["Simulate Farmer Arrival",ScanLine,{type:"ARRIVE"},"arrival"], ["Slow Weighbridge 12→6/hr",AlertTriangle,{type:"SLOWDOWN"}], ["Restore Weighbridge 12/hr",Activity,{type:"RESTORE_CAPACITY"}], ["Complete QC",ClipboardCheck,{type:"QC"},"qc"], ["Simulate Weight · WB-04",Scale,{type:"WEIGHT"},"weight"], ["Complete Procurement",Warehouse,{type:"PROCURE"},"procure"], ["Complete Payment",CircleDollarSign,{type:"PAY"},"payment"], ["Switch Offline",CloudOff,{type:"OFFLINE"}], ["Restore Connectivity",Wifi,{type:"ONLINE"}],
+  const {state,dispatch}=useDemo(); const actions:{label:string;icon:ComponentType<{className?:string}>;action:DemoAction;dialog?:DialogKind}[]=
+    [["Reset Demo",RotateCcw,{type:"RESET"}], ["Book Procurement Request",Sprout,{type:"DEMO_STEP",step:2},"booking"], ["Validate Arrival",ScanLine,{type:"DEMO_STEP",step:6},"arrival"], ["Slow Weighbridge 12→6/hr",AlertTriangle,{type:"SLOWDOWN"}], ["Restore Weighbridge 12/hr",Activity,{type:"RESTORE_CAPACITY"}], ["QC Inspection",ClipboardCheck,{type:"DEMO_STEP",step:8},"qc"], ["Record Weighment",Scale,{type:"DEMO_STEP",step:13},"weight"], ["Government Procurement",Warehouse,{type:"DEMO_STEP",step:14},"procure"], ["Payment",CircleDollarSign,{type:"DEMO_STEP",step:15},"payment"], ["Switch Offline",CloudOff,{type:"OFFLINE"}], ["Restore Connectivity",Wifi,{type:"ONLINE"}],
   ].map(([label,icon,action,dialog])=>({label:label as string,icon:icon as ComponentType<{className?:string}>,action:action as DemoAction,dialog:dialog as DialogKind}));
-  return <Sheet open={open} onOpenChange={onOpenChange}><SheetContent className="w-full overflow-y-auto sm:max-w-md"><SheetHeader><SheetTitle>Demo Controller</SheetTitle><SheetDescription>Drive the shared KisanOne operational state.</SheetDescription></SheetHeader><div className="mt-5 rounded-md bg-header p-3 text-header-foreground"><StatusPill online={state.online} count={state.queuedActions.length}/>{!state.online&&<p className="mt-2 text-xs text-header-subtle">Actions stay on this device and sync automatically after connectivity returns.</p>}</div><div className="mt-4 space-y-2">{actions.map(({label,icon:Icon,action,dialog})=><Button key={label} variant="outline" className="h-11 w-full justify-start" disabled={(action.type==="OFFLINE"&&!state.online)||(action.type==="ONLINE"&&state.online)} onClick={()=>{dispatch(action);if(dialog)setDialog(dialog)}}><Icon/>{label}</Button>)}</div><div className="mt-5 rounded-md border bg-muted p-3 text-xs"><p className="font-bold">Live shared state</p><p className="mt-1 text-muted-foreground">Stage: {state.stage} · Capacity: {state.bottleneck?"Overloaded":"Normal"} · {state.queuedActions.length} offline actions</p></div></SheetContent></Sheet>;
+  return <Sheet open={open} onOpenChange={onOpenChange}><SheetContent className="w-full overflow-y-auto sm:max-w-md"><SheetHeader><SheetTitle>Demo Controller</SheetTitle><SheetDescription>Drive real backend operations through the KisanOne pipeline.</SheetDescription></SheetHeader><div className="mt-5 rounded-md bg-header p-3 text-header-foreground"><StatusPill online={state.online} count={state.queuedActions.length}/>{!state.online&&<p className="mt-2 text-xs text-header-subtle">Actions stay on this device and sync automatically after connectivity returns.</p>}</div><div className="mt-4 space-y-2">{actions.map(({label,icon:Icon,action,dialog})=><Button key={label} variant="outline" className="h-11 w-full justify-start" disabled={(action.type==="OFFLINE"&&!state.online)||(action.type==="ONLINE"&&state.online)} onClick={()=>{dispatch(action);if(dialog)setDialog(dialog)}}><Icon/>{label}</Button>)}</div><div className="mt-5 rounded-md border bg-muted p-3 text-xs"><p className="font-bold">Live transaction state</p><p className="mt-1 text-muted-foreground">Stage: {state.stage} · Request: {state.tx.requestId ?? "none"} · Lot: {state.tx.lotId ?? "none"} · Grade: {state.tx.qcGrade ?? "none"}</p></div></SheetContent></Sheet>;
 }
 
 function JudgeDemo({open,setOpen,auto,setAuto,goStep}:{open:boolean;setOpen:(v:boolean)=>void;auto:boolean;setAuto:(v:boolean)=>void;goStep:(n:number)=>void}) {
   const {state,dispatch}=useDemo(); const step=demoSteps[state.demoStep] ?? demoSteps[0];
   if (!step) return null;
-  return <div className={cn("fixed inset-x-3 bottom-20 z-50 mx-auto max-w-2xl transition-all lg:bottom-5",open?"translate-y-0 opacity-100":"pointer-events-none translate-y-8 opacity-0")} role="dialog" aria-label="Judge demo walkthrough"><div className="overflow-hidden rounded-md border border-demo/40 bg-header text-header-foreground shadow-2xl"><div className="h-1 bg-header-muted"><div className="h-full bg-demo transition-all" style={{width:`${((state.demoStep+1)/demoSteps.length)*100}%`}}/></div><div className="p-4"><div className="flex items-start gap-3"><div className="grid size-9 shrink-0 place-items-center rounded-md bg-demo font-bold text-demo-foreground">{state.demoStep+1}</div><div className="min-w-0"><p className="text-[10px] font-bold uppercase text-header-subtle">Judge Demo · Step {state.demoStep+1} of 18</p><h2 className="mt-0.5 font-bold">{step.title}</h2><p className="mt-1 text-sm leading-relaxed text-header-subtle">{step.text}</p></div><Button variant="ghost" size="icon" className="ml-auto text-header-foreground hover:bg-header-muted" onClick={()=>setOpen(false)}><X/></Button></div><div className="mt-4 flex items-center gap-2"><Button size="icon" variant="outline" className="border-header-border bg-header-muted text-header-foreground" disabled={state.demoStep===0} onClick={()=>goStep(state.demoStep-1)}><ChevronLeft/></Button><Button variant="outline" className="border-header-border bg-header-muted text-header-foreground" onClick={()=>setAuto(!auto)}>{auto?<Pause/>:<Play/>}{auto?"Pause":"Auto play"}</Button><Button className="ml-auto bg-demo text-demo-foreground hover:bg-demo/90" onClick={()=>{if(state.demoStep===demoSteps.length-1){dispatch({type:"RESET"});goStep(0)}else goStep(state.demoStep+1)}}>{state.demoStep===demoSteps.length-1?"Restart":"Next"}<ChevronRight/></Button></div></div></div></div>;
+  return <div className={cn("fixed inset-x-3 bottom-20 z-50 mx-auto max-w-2xl transition-all lg:bottom-5",open?"translate-y-0 opacity-100":"pointer-events-none translate-y-8 opacity-0")} role="dialog" aria-label="Judge demo walkthrough"><div className="overflow-hidden rounded-md border border-demo/40 bg-header text-header-foreground shadow-2xl"><div className="h-1 bg-header-muted"><div className="h-full bg-demo transition-all" style={{width:`${((state.demoStep+1)/demoSteps.length)*100}%`}}/></div><div className="p-4"><div className="flex items-start gap-3"><div className="grid size-9 shrink-0 place-items-center rounded-md bg-demo font-bold text-demo-foreground">{state.demoStep+1}</div><div className="min-w-0"><p className="text-[10px] font-bold uppercase text-header-subtle">Judge Demo · Step {state.demoStep+1} of {demoSteps.length}</p><h2 className="mt-0.5 font-bold">{step.title}</h2><p className="mt-1 text-sm leading-relaxed text-header-subtle">{step.text}</p></div><Button variant="ghost" size="icon" className="ml-auto text-header-foreground hover:bg-header-muted" onClick={()=>setOpen(false)}><X/></Button></div><div className="mt-4 flex items-center gap-2"><Button size="icon" variant="outline" className="border-header-border bg-header-muted text-header-foreground" disabled={state.demoStep===0} onClick={()=>goStep(state.demoStep-1)}><ChevronLeft/></Button><Button variant="outline" className="border-header-border bg-header-muted text-header-foreground" onClick={()=>setAuto(!auto)}>{auto?<Pause/>:<Play/>}{auto?"Pause":"Auto play"}</Button><Button className="ml-auto bg-demo text-demo-foreground hover:bg-demo/90" onClick={()=>{if(state.demoStep===demoSteps.length-1){dispatch({type:"RESET"});goStep(0)}else goStep(state.demoStep+1)}}>{state.demoStep===demoSteps.length-1?"Restart":"Next"}<ChevronRight/></Button></div></div></div></div>;
 }
-
-function OperationDialog({kind,setKind}:{kind:DialogKind;setKind:(k:DialogKind)=>void}) {
-  const {state,dispatch,gross}=useDemo(); if(!kind)return null;
-  const config={arrival:{title:"Arrival Validation",desc:"Validate farmer and request at the centre gate",action:{type:"ARRIVE"} as DemoAction,cta:"Validate & Admit"},qc:{title:"QC Inspection",desc:"Record commodity quality against procurement rules",action:{type:"QC"} as DemoAction,cta:"Pass QC"},weight:{title:"Weighment Console",desc:"Live simulated device stream from RS-232 WB-04",action:{type:"WEIGHT"} as DemoAction,cta:"Confirm Weight"},procure:{title:"Procurement Transaction",desc:"Generate the lot and procurement transaction",action:{type:"PROCURE"} as DemoAction,cta:"Complete Procurement"},payment:{title:"Payment Transaction",desc:"Close the procurement loop with payment confirmation",action:{type:"PAY"} as DemoAction,cta:"Mark Payment Completed"},booking:{title:"Book Procurement",desc:"Capacity-aware request for Sehore Procurement Centre",action:{type:"REQUEST"} as DemoAction,cta:"Generate Request K1-104"}}[kind];
-  return <Dialog open onOpenChange={(v)=>!v&&setKind(null)}><DialogContent className="max-h-[90vh] overflow-y-auto"><DialogHeader><DialogTitle>{config.title}</DialogTitle><DialogDescription>{config.desc}</DialogDescription></DialogHeader><div className="space-y-3">{kind==="arrival"&&<><FormRow label="Farmer ID" value="FMR-104"/><FormRow label="Request ID" value="K1-104"/><div className="grid place-items-center rounded-md border-2 border-dashed bg-muted p-6"><ScanLine className="size-10 text-primary"/><p className="mt-2 font-bold">Signed QR verified</p><p className="text-xs text-muted-foreground">10:43 AM · OP-07 · GATE-02</p></div></>}{kind==="qc"&&<div className="grid grid-cols-2 gap-3"><FormRow label="Moisture" value="12.4%"/><FormRow label="Foreign Matter" value="1.8%"/><FormRow label="Grade" value="A"/><FormRow label="Rule Result" value="PASS"/></div>}{kind==="weight"&&<div className="rounded-md bg-header p-6 text-center text-header-foreground"><p className="text-xs text-header-subtle">RS-232 · WB-04 · STREAMING</p><p className="mt-4 font-mono text-5xl font-bold">52.40 <span className="text-xl">KG</span></p><p className="mt-3 text-xs text-success-soft"><Signal className="mr-1 inline size-3"/>Stable reading · checksum valid</p></div>}{kind==="procure"&&<><FormRow label="Lot ID" value="LOT-2026-0104"/><FormRow label="Rate" value="₹2,275 / qtl · Wheat MSP"/><FormRow label="Gross amount" value={`₹${gross.toLocaleString("en-IN",{minimumFractionDigits:2})}`}/></>}{kind==="payment"&&<><FormRow label="Transaction" value="TXN-10482"/><FormRow label="Payment ID" value="PAY-10482"/><FormRow label="Amount" value={`₹${gross.toLocaleString("en-IN",{minimumFractionDigits:2})}`}/><FormRow label="Mode" value="DBT · Bank a/c ••••6192"/></>}{kind==="booking"&&<><FormRow label="Farmer ID / किसान आईडी" value="FMR-104 · Ramesh Kumar"/><FormRow label="Crop / फसल" value="Wheat"/><FormRow label="Quantity / मात्रा" value="52.4 kg"/><FormRow label="Centre / केंद्र" value="Sehore Procurement Centre"/><div className="rounded-md bg-success-muted p-3 text-xs text-success"><Check className="mr-1 inline size-4"/>Capacity engine: safe arrival slot available</div></>}</div><DialogFooter><Button variant="outline" onClick={()=>setKind(null)}>Cancel</Button><Button onClick={()=>{dispatch(config.action);setKind(null)}} disabled={(kind==="qc"&&state.qcPassed)||(kind==="weight"&&state.weightConfirmed)||(kind==="payment"&&state.paymentComplete)}><Check/>{config.cta}</Button></DialogFooter></DialogContent></Dialog>;
-}
-
-function FormRow({label,value}:{label:string;value:string}) { return <div><label className="text-xs font-semibold text-muted-foreground">{label}</label><div className="mt-1 rounded-md border bg-muted/30 px-3 py-2 text-sm font-medium">{value}</div></div>; }
