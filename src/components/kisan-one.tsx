@@ -60,7 +60,7 @@ function KisanShell() {
     dispatch({ type: "DEMO_STEP", step: safe });
     setView(step.view);
     if (step.action) dispatch(step.action);
-    setDialog(step.dialog ?? null);
+    setDialog(null);
   };
   useEffect(() => {
     if (!auto || !demoOpen) return;
