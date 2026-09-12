@@ -139,6 +139,25 @@ export const assignSlot = (p: {
   farmerArea?: string;
 }) => request<SlotAssignResult>("POST", "/slots/assign", p);
 
+export interface CentreSlot {
+  slotId: string;
+  centreId: string;
+  cropCode: string;
+  date: string;
+  startTime: string;
+  endTime: string;
+  capacityKg: number | string;
+  maxFarmers: number;
+  allocatedKg: number | string;
+  allocatedFarmers: number;
+  remainingCapacityKg: number | string;
+  remainingFarmerCapacity: number;
+  status: string;
+}
+
+export const listCentreSlots = (centreId: string) =>
+  request<CentreSlot[]>("GET", `/centres/${centreId}/slots`);
+
 // ─── Procurement Requests ───────────────────────────────────────────────────────
 
 export interface ProcurementRequest {
@@ -149,8 +168,15 @@ export interface ProcurementRequest {
   expectedQuantityKg: number;
   assignedCentreId: string;
   assignedSlotId: string;
-  status: string;
+  queueNumber?: number;
+  bookingStatus?: string;
+  arrivalStatus?: string;
+  arrivedAt?: string | null;
+  requestStatus?: string;
+  status?: string;
   lotId?: string;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export const createProcurementRequest = (p: {
@@ -175,6 +201,14 @@ export const listFarmerProcurementRequests = (farmerId: string) =>
 
 export const listCentreProcurementRequests = (centreId: string) =>
   request<ProcurementRequest[]>("GET", `/centres/${centreId}/procurement-requests`);
+
+export interface RejectRequestPayload {
+  employeeId: string;
+  rejectionReason?: string;
+}
+
+export const rejectProcurementRequest = (requestId: string, p: RejectRequestPayload) =>
+  request<ProcurementRequest>("POST", `/procurement-requests/${requestId}/reject`, p);
 
 // ─── Arrival ────────────────────────────────────────────────────────────────────
 
@@ -400,7 +434,7 @@ export interface GovernmentMetrics {
 }
 
 export async function getGovernmentMetrics(): Promise<GovernmentMetrics> {
-  const centres = await listCentres().catch(() => []);
+  const centres = await listCentres();
   const activeCentres = centres.filter(c => c.status === "ACTIVE");
 
   let totalProcurements = 0;
@@ -483,4 +517,343 @@ export async function getGovernmentMetrics(): Promise<GovernmentMetrics> {
     commodityMix,
     centreComparison,
   };
+}
+
+export interface QueueItem {
+  requestId: string;
+  queueNumber: number;
+  farmerId: string;
+  cropCode: string;
+  farmerArea?: string;
+  expectedQuantityKg: number;
+  assignedCentreId: string;
+  assignedSlotId: string;
+  bookingStatus: string;
+  arrivalStatus: string;
+  arrivedAt?: string | null;
+  requestStatus: string;
+  lotId?: string;
+  createdAt: string;
+  currentProcessingStatus: string;
+  isProcessNextCandidate: boolean;
+  qcGrade?: string | null;
+  qcDecision?: string | null;
+  qcAttemptId?: string | null;
+  weighmentId?: string | null;
+  procurementId?: string | null;
+  canReject?: boolean;
+}
+
+export interface OfficerCommandMetrics {
+  centreId: string;
+  farmersToday: number;
+  farmersTodayDetail: string;
+  processedToday: number;
+  processedTodayDetail: string;
+  inQueue: number;
+  inQueueDetail: string;
+  averageWait: string;
+  averageWaitDetail: string;
+  isAverageWaitReal: boolean;
+  capacity: string;
+  capacityDetail: string;
+  isCapacityReal: boolean;
+  queueItems: QueueItem[];
+}
+
+export async function getOfficerCommandMetrics(centreId: string): Promise<OfficerCommandMetrics> {
+  try {
+    const [requests, slots, centre] = await Promise.all([
+      listCentreProcurementRequests(centreId),
+      listCentreSlots(centreId),
+      getCentre(centreId),
+    ]);
+
+    const isToday = (dateStr?: string | null) => {
+      if (!dateStr) return false;
+      const d = new Date(dateStr);
+      if (isNaN(d.getTime())) return false;
+      const now = new Date();
+      const isLocalToday =
+        d.getFullYear() === now.getFullYear() &&
+        d.getMonth() === now.getMonth() &&
+        d.getDate() === now.getDate();
+      const isUtcToday =
+        d.getUTCFullYear() === now.getUTCFullYear() &&
+        d.getUTCMonth() === now.getUTCMonth() &&
+        d.getUTCDate() === now.getUTCDate();
+      return isLocalToday || isUtcToday;
+    };
+
+    // 1. Farmers Today: strictly count today's actual physical arrivals (arrivedAt is today)
+    const arrivedToday = requests.filter(
+      (r) => r.arrivalStatus === "ARRIVED" && !!r.arrivedAt && isToday(r.arrivedAt)
+    );
+    const uniqueFarmersToday = new Set(arrivedToday.map((r) => r.farmerId));
+    const farmersTodayCount = arrivedToday.length;
+    const farmersTodayDetail =
+      farmersTodayCount > 0
+        ? `${farmersTodayCount} arrival(s) · ${uniqueFarmersToday.size} farmer(s)`
+        : "No arrivals today";
+
+    // 2. Processed Today, completed lots, and Wait Duration calculation:
+    const completedLotIds = new Set<string>();
+    let processedTodayCount = 0;
+    const waitDurationsSec: number[] = [];
+
+    const lotsWithRequests = requests.filter((r) => !!r.lotId);
+    await Promise.all(
+      lotsWithRequests.map(async (req) => {
+        if (!req.lotId) return;
+        try {
+          const proc = await getProcurementForLot(req.lotId);
+          if (proc && proc.procurementId) {
+            completedLotIds.add(req.lotId);
+            const procDate =
+              (proc as unknown as { procuredAt?: string; createdAt?: string }).procuredAt ||
+              (proc as unknown as { procuredAt?: string; createdAt?: string }).createdAt;
+            if (isToday(procDate)) {
+              processedTodayCount++;
+            }
+          }
+        } catch {
+          // No procurement yet for this lot
+        }
+      })
+    );
+
+    // Calculate operational waiting time from physical arrival to first operational event (QC) for today's arrived requests
+    await Promise.all(
+      lotsWithRequests.map(async (req) => {
+        if (req.lotId && req.arrivalStatus === "ARRIVED" && req.arrivedAt && isToday(req.arrivedAt)) {
+          try {
+            const qcs = await listQCAttempts(req.lotId);
+            if (qcs && qcs.length > 0 && qcs[0].performedAt) {
+              const arrMs = new Date(req.arrivedAt).getTime();
+              const qcMs = new Date(qcs[0].performedAt).getTime();
+              const diffSec = (qcMs - arrMs) / 1000;
+              if (diffSec >= 0 && diffSec < 86400 * 7) {
+                waitDurationsSec.push(diffSec);
+              }
+            }
+          } catch {
+            // QC listing failed
+          }
+        }
+      })
+    );
+
+    const processedTodayDetail =
+      processedTodayCount > 0
+        ? `${processedTodayCount} completed today`
+        : "0 completed today";
+
+    // 3. Build Active Queue Items:
+    // Exclude cancelled, completed, and rejected requests
+    const activeRequests = requests.filter(
+      (r) =>
+        r.bookingStatus !== "CANCELLED" &&
+        r.requestStatus !== "CANCELLED" &&
+        r.requestStatus !== "COMPLETED" &&
+        r.requestStatus !== "REJECTED" &&
+        (r.status ? r.status !== "CANCELLED" && r.status !== "COMPLETED" && r.status !== "REJECTED" : true) &&
+        (!r.lotId || !completedLotIds.has(r.lotId))
+    );
+
+    // Fetch QC and weighment status for each active request to determine current processing stage
+    const queueItems: QueueItem[] = await Promise.all(
+      activeRequests.map(async (req) => {
+        let currentStatus = "Awaiting Gate Arrival";
+        let qcAttemptId: string | null = null;
+        let qcGrade: string | null = null;
+        let qcDecision: string | null = null;
+        let weighmentId: string | null = null;
+        let procurementId: string | null = null;
+        let isGradeF = false;
+
+        if (req.arrivalStatus === "ARRIVED") {
+          currentStatus = "Arrived · Ready for QC";
+          if (req.lotId) {
+            try {
+              const qcs = await listQCAttempts(req.lotId);
+              if (qcs && qcs.length > 0) {
+                const latestQc = qcs[qcs.length - 1];
+                qcAttemptId = latestQc.qcAttemptId;
+                try {
+                  const evalRes = await getQCEvaluation(latestQc.qcAttemptId);
+                  if (evalRes) {
+                    qcGrade = evalRes.grade;
+                    qcDecision = evalRes.decision;
+                    if (evalRes.grade === "F" || evalRes.decision === "FAIL") {
+                      currentStatus = "QC Failed (Grade F) · Action Needed";
+                      isGradeF = true;
+                    } else {
+                      currentStatus = `QC Passed (Grade ${evalRes.grade}) · Ready for Weighment`;
+                    }
+                  } else {
+                    currentStatus = "QC In Progress";
+                  }
+                } catch {
+                  currentStatus = "QC Recorded";
+                }
+              }
+            } catch {
+              // Failed to fetch QC
+            }
+
+            if (!isGradeF) {
+              try {
+                const weights = await request<Weighment[]>("GET", `/lots/${req.lotId}/weighments`).catch(() => []);
+                if (weights && weights.length > 0) {
+                  const latestWeight = weights[weights.length - 1];
+                  weighmentId = latestWeight.weighmentId;
+                  currentStatus = "Weighed · Ready for Procurement";
+                }
+              } catch {
+                // Failed to fetch weighments
+              }
+            }
+          }
+        }
+
+        return {
+          requestId: req.requestId,
+          queueNumber: Number(req.queueNumber) || 1,
+          farmerId: req.farmerId,
+          cropCode: req.cropCode,
+          farmerArea: req.farmerArea,
+          expectedQuantityKg: Number(req.expectedQuantityKg) || 0,
+          assignedCentreId: req.assignedCentreId,
+          assignedSlotId: req.assignedSlotId,
+          bookingStatus: req.bookingStatus ?? "CONFIRMED",
+          arrivalStatus: req.arrivalStatus ?? "NOT_ARRIVED",
+          arrivedAt: req.arrivedAt,
+          requestStatus: req.requestStatus ?? "SCHEDULED",
+          lotId: req.lotId,
+          createdAt: req.createdAt ?? new Date().toISOString(),
+          currentProcessingStatus: currentStatus,
+          isProcessNextCandidate: false,
+          qcGrade,
+          qcDecision,
+          qcAttemptId,
+          weighmentId,
+          procurementId,
+          canReject: isGradeF || req.arrivalStatus === "ARRIVED",
+        };
+      })
+    );
+
+    // Sort queue by deterministic tie-breakers:
+    // 1. queueNumber ascending
+    // 2. assignedSlotId ascending
+    // 3. createdAt ascending
+    // 4. requestId ascending
+    queueItems.sort((a, b) => {
+      if (a.queueNumber !== b.queueNumber) return a.queueNumber - b.queueNumber;
+      if (a.assignedSlotId !== b.assignedSlotId) return a.assignedSlotId.localeCompare(b.assignedSlotId);
+      const timeA = new Date(a.createdAt).getTime();
+      const timeB = new Date(b.createdAt).getTime();
+      if (timeA !== timeB) return timeA - timeB;
+      return a.requestId.localeCompare(b.requestId);
+    });
+
+    // Identify the SINGLE Process Next candidate:
+    // Earliest arrived, non-terminal request that is NOT blocked by Grade F
+    let candidateAssigned = false;
+    for (const item of queueItems) {
+      if (
+        item.arrivalStatus === "ARRIVED" &&
+        item.qcGrade !== "F" &&
+        !candidateAssigned
+      ) {
+        item.isProcessNextCandidate = true;
+        candidateAssigned = true;
+      }
+    }
+
+    const inQueueCount = queueItems.length;
+    const inQueueDetail =
+      inQueueCount > 0
+        ? `${inQueueCount} in active queue`
+        : "Queue is clear";
+
+    // 4. Average Wait:
+    let averageWait = "—";
+    let averageWaitDetail = "No arrival-to-QC events today";
+    let isAverageWaitReal = false;
+
+    if (waitDurationsSec.length > 0) {
+      const avgSec = Math.round(
+        waitDurationsSec.reduce((a, b) => a + b, 0) / waitDurationsSec.length
+      );
+      averageWait = avgSec < 60 ? `${avgSec}s` : `${Math.round(avgSec / 60)} min`;
+      averageWaitDetail = `Avg. Arrival → 1st Action (QC): ${avgSec < 60 ? `${avgSec}s` : `${Math.round(avgSec / 60)} min`} (${waitDurationsSec.length} today)`;
+      isAverageWaitReal = true;
+    }
+
+    // 5. Capacity:
+    let totalSlotCapacityKg = 0;
+    let totalAllocatedKg = 0;
+    let totalRemainingKg = 0;
+
+    for (const s of slots) {
+      const cap = Number(s.capacityKg) || 0;
+      const alloc = Number(s.allocatedKg) || 0;
+      const rem = Number(s.remainingCapacityKg) || (cap - alloc);
+      totalSlotCapacityKg += cap;
+      totalAllocatedKg += alloc;
+      totalRemainingKg += rem;
+    }
+
+    const allocatedMT = (totalAllocatedKg / 1000).toFixed(1);
+    const capacityMT = (totalSlotCapacityKg / 1000).toFixed(0);
+    const remainingMT = (totalRemainingKg / 1000).toFixed(1);
+    const percentAllocated =
+      totalSlotCapacityKg > 0
+        ? ((totalAllocatedKg / totalSlotCapacityKg) * 100).toFixed(1)
+        : "0.0";
+
+    const capacityDisplay = totalSlotCapacityKg > 0 ? `${allocatedMT} / ${capacityMT} MT` : "—";
+    const capacityDetail =
+      totalSlotCapacityKg > 0
+        ? `${percentAllocated}% allocated · ${remainingMT} MT free`
+        : centre
+        ? `Daily cap: ${Number(centre.dailyProcurementCapacityKg) / 1000} MT`
+        : "Capacity data loading";
+
+    return {
+      centreId,
+      farmersToday: farmersTodayCount,
+      farmersTodayDetail,
+      processedToday: processedTodayCount,
+      processedTodayDetail,
+      inQueue: inQueueCount,
+      inQueueDetail,
+      averageWait,
+      averageWaitDetail,
+      isAverageWaitReal,
+      capacity: capacityDisplay,
+      capacityDetail,
+      isCapacityReal: totalSlotCapacityKg > 0,
+      queueItems,
+    };
+  } catch (err) {
+    console.error("Failed to load officer command metrics:", err);
+    return {
+      centreId,
+      farmersToday: 0,
+      farmersTodayDetail: "Error loading",
+      processedToday: 0,
+      processedTodayDetail: "Error loading",
+      inQueue: 0,
+      inQueueDetail: "Error loading",
+      averageWait: "Placeholder",
+      averageWaitDetail: "Demo / Placeholder — backend aggregate unavailable",
+      isAverageWaitReal: false,
+      capacity: "—",
+      capacityDetail: "Error loading",
+      isCapacityReal: false,
+      queueItems: [],
+    };
+  }
 }

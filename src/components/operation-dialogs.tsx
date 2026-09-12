@@ -3,7 +3,7 @@
  * Each dialog replaces the original static display with actual form fields + API calls.
  */
 import { useEffect, useState } from "react";
-import { Check, AlertTriangle, Loader2 } from "lucide-react";
+import { Check, AlertTriangle, Loader2, RotateCcw, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useDemo, type DemoAction } from "@/lib/kisan-state";
@@ -176,7 +176,15 @@ function ArrivalForm({ onDone }: { onDone: () => void }) {
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<api.ArrivalResult | null>(null);
 
-  useEffect(() => { api.listEmployees().then(setEmployees).catch(() => {}); }, []);
+  useEffect(() => {
+    api.listEmployees().then(emps => {
+      setEmployees(emps);
+      if (!employeeId) {
+        const match = emps.find(e => e.centreId === (state.tx.assignedCentreId || "MP-SEH-04") && e.status === "ACTIVE");
+        if (match) setEmployeeId(match.employeeId);
+      }
+    }).catch(() => {});
+  }, []);
 
   const submit = async () => {
     setError(null);
@@ -229,7 +237,13 @@ function QCForm({ onDone }: { onDone: () => void }) {
   const [evaluation, setEvaluation] = useState<api.QCEvaluation | null>(null);
 
   useEffect(() => {
-    api.listEmployees().then(setEmployees).catch(() => {});
+    api.listEmployees().then(emps => {
+      setEmployees(emps);
+      if (!employeeId) {
+        const match = emps.find(e => e.centreId === (state.tx.assignedCentreId || "MP-SEH-04") && e.status === "ACTIVE");
+        if (match) setEmployeeId(match.employeeId);
+      }
+    }).catch(() => {});
     if (state.tx.cropCode) {
       api.getCropConfig(state.tx.cropCode).then(c => {
         setCropConfig(c);
@@ -270,11 +284,39 @@ function QCForm({ onDone }: { onDone: () => void }) {
     } finally { setLoading(false); }
   };
 
+  const [rejecting, setRejecting] = useState(false);
+
+  const handleReject = async () => {
+    if (!state.tx.requestId) return;
+    if (!window.confirm(`Are you sure you want to REJECT request ${state.tx.requestId}? This will permanently mark the request and lot as REJECTED and close it.`)) {
+      return;
+    }
+    setRejecting(true);
+    setError(null);
+    try {
+      let empId = employeeId;
+      if (!empId) {
+        const targetCentre = state.tx.assignedCentreId || "MP-SEH-04";
+        const match = employees.find(e => e.centreId === targetCentre && e.status === "ACTIVE");
+        empId = match?.employeeId || "EMP-01";
+      }
+      await api.rejectProcurementRequest(state.tx.requestId, {
+        employeeId: empId,
+        rejectionReason: `QC Failed: Grade F (${evaluation?.decision ?? "FAIL"})`,
+      });
+      dispatch({ type: "REJECT" });
+      onDone();
+    } catch (e) {
+      setError(e instanceof api.ApiError ? e.detail : (e as Error).message);
+      setRejecting(false);
+    }
+  };
+
   if (evaluation) {
     const isF = evaluation.grade === "F";
     return <>
       <div className={`rounded-md p-3 text-sm ${isF ? "bg-destructive/10 text-destructive" : "bg-success-muted text-success"}`}>
-        {isF ? <><AlertTriangle className="mr-1 inline size-4" />Quality Failed — Procurement Not Allowed</> : <><Check className="mr-1 inline size-4" />Quality Check Passed!</>}
+        {isF ? <><AlertTriangle className="mr-1 inline size-4" />Quality Failed (Grade F) — Procurement Blocked</> : <><Check className="mr-1 inline size-4" />Quality Check Passed!</>}
       </div>
       <div className="grid grid-cols-2 gap-3">
         <ResultRow label="Grade" value={evaluation.grade} highlight />
@@ -290,10 +332,25 @@ function QCForm({ onDone }: { onDone: () => void }) {
           <span>{k}</span><span className="font-mono">{JSON.stringify(v)}</span>
         </div>)}
       </div>}
-      {isF && <div className="rounded-md border border-warning/40 bg-warning-muted p-3 text-sm">
-        <strong>Grade F:</strong> This lot cannot proceed to procurement. You may perform a retest by opening the QC dialog again.
+      {isF && <div className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm">
+        <strong>Grade F Action Required:</strong> This lot failed quality specifications. You may perform an immediate retest if allowed, or explicitly reject and terminate the request to remove it from the operational queue.
       </div>}
-      <DialogFooter><Button onClick={onDone}><Check />Done</Button></DialogFooter>
+      <DialogFooter className="flex-col sm:flex-row gap-2">
+        {isF ? (
+          <>
+            <Button variant="outline" onClick={() => setEvaluation(null)}>
+              <RotateCcw className="mr-1 size-4" />Retest QC
+            </Button>
+            <Button variant="destructive" onClick={handleReject} disabled={rejecting}>
+              {rejecting ? <Loader2 className="animate-spin mr-1 size-4" /> : <XCircle className="mr-1 size-4" />}
+              {rejecting ? "Rejecting..." : "Reject Request"}
+            </Button>
+            <Button variant="ghost" onClick={onDone}>Close</Button>
+          </>
+        ) : (
+          <Button onClick={onDone}><Check />Done</Button>
+        )}
+      </DialogFooter>
     </>;
   }
 
@@ -334,6 +391,17 @@ function WeighmentForm({ onDone }: { onDone: () => void }) {
   const [result, setResult] = useState<api.Weighment | null>(null);
 
   useEffect(() => { api.listEmployees().then(setEmployees).catch(() => {}); }, []);
+
+  // Grade F check - Weighment not allowed
+  if (state.tx.qcGrade === "F") {
+    return <>
+      <div className="rounded-md border border-destructive/40 bg-destructive/10 p-4 text-sm">
+        <div className="flex items-center gap-2 text-destructive font-bold"><AlertTriangle className="size-5" />Grade F — Weighment Not Allowed</div>
+        <p className="mt-2 text-muted-foreground">This lot received Grade F (FAIL). Produce cannot proceed to weighment or government procurement. Perform a QC retest to obtain a passing grade, or reject the request.</p>
+      </div>
+      <DialogFooter><Button variant="outline" onClick={onDone}>Close</Button></DialogFooter>
+    </>;
+  }
 
   const submit = async () => {
     setError(null);

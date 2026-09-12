@@ -73,7 +73,8 @@ export type DemoAction =
   | { type: "ONLINE" }
   | { type: "MOVE"; stage: Stage }
   | { type: "DEMO_STEP"; step: number }
-  | { type: "SET_TX"; data: Partial<TransactionData> };
+  | { type: "SET_TX"; data: Partial<TransactionData> }
+  | { type: "REJECT" };
 
 const initialState: DemoState = {
   requestCreated: false,
@@ -115,6 +116,7 @@ function reducer(state: DemoState, action: DemoAction): DemoState {
     case "MOVE": return { ...state, stage: action.stage, events: addEvent(state, `Moved to ${action.stage}`, "info") };
     case "DEMO_STEP": return { ...state, demoStep: action.step };
     case "SET_TX": return { ...state, tx: { ...state.tx, ...action.data } };
+    case "REJECT": return { ...state, stage: "Gate", tx: { ...emptyTransaction }, events: addEvent(state, state.tx.requestId ? `Request ${state.tx.requestId} REJECTED and closed` : "Request rejected", "warning") };
   }
 }
 

@@ -3,7 +3,7 @@ import {
   Activity, AlertTriangle, ArrowRight, BarChart3, Bell, Check, ChevronLeft, ChevronRight,
   CircleDollarSign, ClipboardCheck, CloudOff, Database, Gauge, IndianRupee, Landmark,
   Leaf, Menu, MessageSquareText, Mic2, Pause, Phone, Play, RotateCcw, Scale, ScanLine,
-  ShieldCheck, Signal, Sprout, Truck, UserRound, Users, Warehouse, Weight, Wifi, X,
+  ShieldCheck, Signal, Sprout, Truck, UserRound, Users, Warehouse, Weight, Wifi, X, XCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -151,10 +151,322 @@ function DemoTag() {
 function CommandCentre({ setDialog }: { setDialog: (d: DialogKind) => void }) {
   const { state, dispatch } = useDemo();
   const tx = state.tx;
-  const kpis = [["Farmers Today", "—", Users], ["Processed", "—", ClipboardCheck], ["In Queue", "—", Truck], ["Average Wait", "—", Activity], ["Capacity", "—", Gauge]] as const;
+  const [metrics, setMetrics] = useState<api.OfficerCommandMetrics | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [dataError, setDataError] = useState<string | null>(null);
+
+  const centreId = tx.assignedCentreId || "MP-SEH-04";
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    setDataError(null);
+    api.getOfficerCommandMetrics(centreId)
+      .then((m) => {
+        if (active) setMetrics(m);
+      })
+      .catch((err) => {
+        if (active) {
+          setMetrics(null);
+          setDataError(err instanceof Error ? err.message : String(err));
+        }
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [centreId, tx.requestId, tx.lotId, tx.procurementId, tx.paymentId, state.stage, state.paymentComplete]);
+
+  const kpis = [
+    {
+      label: "Farmers Today",
+      value: loading && !metrics ? "—" : metrics ? String(metrics.farmersToday) : "—",
+      subtext: metrics?.farmersTodayDetail ?? "Arrivals today",
+      Icon: Users,
+      isReal: !!metrics,
+    },
+    {
+      label: "Processed",
+      value: loading && !metrics ? "—" : metrics ? String(metrics.processedToday) : "—",
+      subtext: metrics?.processedTodayDetail ?? "Completed today",
+      Icon: ClipboardCheck,
+      isReal: !!metrics,
+    },
+    {
+      label: "In Queue",
+      value: loading && !metrics ? "—" : metrics ? String(metrics.inQueue) : "—",
+      subtext: metrics?.inQueueDetail ?? "Awaiting completion",
+      Icon: Truck,
+      isReal: !!metrics,
+    },
+    {
+      label: "Average Wait",
+      value: loading && !metrics ? "—" : metrics ? metrics.averageWait : "—",
+      subtext: metrics?.averageWaitDetail ?? "Avg. Arrival → QC",
+      Icon: Activity,
+      isReal: metrics ? metrics.isAverageWaitReal : false,
+    },
+    {
+      label: "Capacity",
+      value: loading && !metrics ? "—" : metrics ? metrics.capacity : "—",
+      subtext: metrics?.capacityDetail ?? "Slot capacity",
+      Icon: Gauge,
+      isReal: metrics ? metrics.isCapacityReal : false,
+    },
+  ];
+
+  const handleProcessNext = async (item: api.QueueItem) => {
+    let lotId = item.lotId ?? null;
+    let qcAttemptId: string | null = null;
+    let qcGrade: string | null = null;
+    let qcDecision: string | null = null;
+    let qcPricePerKg: number | null = null;
+    let weighmentId: string | null = null;
+    let netWeightKg: number | null = null;
+    let procurementId: string | null = null;
+    let grossAmount: number | null = null;
+    let paymentId: string | null = null;
+    let paymentStatus: string | null = null;
+
+    if (lotId) {
+      try {
+        const qcs = await api.listQCAttempts(lotId);
+        if (qcs && qcs.length > 0) {
+          const latestQc = qcs[qcs.length - 1];
+          qcAttemptId = latestQc.qcAttemptId;
+          try {
+            const evalRes = await api.getQCEvaluation(latestQc.qcAttemptId);
+            if (evalRes) {
+              qcGrade = evalRes.grade;
+              qcDecision = evalRes.decision;
+              qcPricePerKg = evalRes.pricePerKg;
+            }
+          } catch {}
+        }
+      } catch {}
+
+      try {
+        const proc = await api.getProcurementForLot(lotId);
+        if (proc && proc.procurementId) {
+          procurementId = proc.procurementId;
+          weighmentId = proc.weighmentId;
+          grossAmount = Number(proc.grossAmount);
+          netWeightKg = Number(proc.procurementQuantityKg);
+        }
+      } catch {}
+    }
+
+    let nextStage: Stage = "Gate";
+    if (item.arrivalStatus === "ARRIVED") {
+      if (procurementId) {
+        nextStage = "Payment";
+      } else if (weighmentId) {
+        nextStage = "Procurement";
+      } else if (qcAttemptId && qcGrade !== "F") {
+        nextStage = "Weighment";
+      } else {
+        nextStage = "QC";
+      }
+    }
+
+    dispatch({
+      type: "SET_TX",
+      data: {
+        farmerId: item.farmerId,
+        farmerName: item.farmerId,
+        cropCode: item.cropCode,
+        farmerArea: item.farmerArea ?? null,
+        expectedQuantityKg: item.expectedQuantityKg,
+        requestId: item.requestId,
+        assignedCentreId: item.assignedCentreId,
+        assignedCentreName: item.assignedCentreId,
+        assignedSlotId: item.assignedSlotId,
+        lotId,
+        qcAttemptId,
+        qcGrade,
+        qcDecision,
+        qcPricePerKg,
+        weighmentId,
+        netWeightKg,
+        procurementId,
+        grossAmount,
+        paymentId,
+        paymentStatus,
+      },
+    });
+    dispatch({ type: "MOVE", stage: nextStage });
+  };
+
+  const [employees, setEmployees] = useState<api.Employee[]>([]);
+  const [actionFeedback, setActionFeedback] = useState<{ type: "success" | "error"; message: string } | null>(null);
+  const [rejectingReqId, setRejectingReqId] = useState<string | null>(null);
+  const [markingArrivalReqId, setMarkingArrivalReqId] = useState<string | null>(null);
+
+  useEffect(() => {
+    api.listEmployees().then(setEmployees).catch(() => {});
+  }, []);
+
+  const getActiveEmployeeId = async (targetCentreId: string): Promise<string> => {
+    let emps = employees;
+    if (!emps || emps.length === 0) {
+      emps = await api.listEmployees().catch(() => []);
+      setEmployees(emps);
+    }
+    if (tx.employeeId) {
+      const matched = emps.find(
+        (e) => e.employeeId === tx.employeeId && e.centreId === targetCentreId && e.status === "ACTIVE"
+      );
+      if (matched) return matched.employeeId;
+    }
+    const centreEmp = emps.find((e) => e.centreId === targetCentreId && e.status === "ACTIVE");
+    return centreEmp?.employeeId || "EMP-01";
+  };
+
+  const handleDirectReject = async (requestId: string, centreForReq?: string) => {
+    if (
+      !window.confirm(
+        `Are you sure you want to REJECT procurement request ${requestId}? This will permanently mark the request and lot as REJECTED and remove it from the active queue.`
+      )
+    ) {
+      return;
+    }
+    try {
+      setRejectingReqId(requestId);
+      setActionFeedback(null);
+      const targetCentre = centreForReq || tx.assignedCentreId || centreId;
+      const empId = await getActiveEmployeeId(targetCentre);
+      await api.rejectProcurementRequest(requestId, {
+        employeeId: empId,
+        rejectionReason: "Explicit rejection by officer following Grade F",
+      });
+      if (tx.requestId === requestId) {
+        dispatch({ type: "REJECT" });
+      }
+      setActionFeedback({
+        type: "success",
+        message: `Request ${requestId} successfully rejected and removed from active queue.`,
+      });
+      const updated = await api.getOfficerCommandMetrics(centreId);
+      setMetrics(updated);
+    } catch (e) {
+      console.error("Failed to reject request:", e);
+      const errMsg = e instanceof api.ApiError ? e.detail : (e as Error).message || "Failed to reject request";
+      setActionFeedback({
+        type: "error",
+        message: `Rejection failed: ${errMsg}`,
+      });
+    } finally {
+      setRejectingReqId(null);
+    }
+  };
+
+  const handleMarkArrival = async (item: api.QueueItem) => {
+    try {
+      setMarkingArrivalReqId(item.requestId);
+      setActionFeedback(null);
+      const targetCentre = item.assignedCentreId || centreId;
+      const empId = await getActiveEmployeeId(targetCentre);
+      const res = await api.markArrival(item.requestId, {
+        farmerId: item.farmerId,
+        employeeId: empId,
+      });
+      if (tx.requestId === item.requestId) {
+        dispatch({ type: "SET_TX", data: { lotId: res.lotId, employeeId: empId } });
+        dispatch({ type: "ARRIVE" });
+      }
+      setActionFeedback({
+        type: "success",
+        message: `Arrival marked for Farmer ${item.farmerId} (Request ${item.requestId}). Lot ${res.lotId} created.`,
+      });
+      const updated = await api.getOfficerCommandMetrics(centreId);
+      setMetrics(updated);
+    } catch (e) {
+      console.error("Failed to mark arrival:", e);
+      const errMsg = e instanceof api.ApiError ? e.detail : (e as Error).message || "Failed to record arrival";
+      setActionFeedback({
+        type: "error",
+        message: `Arrival failed: ${errMsg}`,
+      });
+    } finally {
+      setMarkingArrivalReqId(null);
+    }
+  };
+
+  const handleOpenQcForItem = (item: api.QueueItem) => {
+    dispatch({
+      type: "SET_TX",
+      data: {
+        farmerId: item.farmerId,
+        farmerName: item.farmerId,
+        cropCode: item.cropCode,
+        farmerArea: item.farmerArea ?? null,
+        expectedQuantityKg: item.expectedQuantityKg,
+        requestId: item.requestId,
+        assignedCentreId: item.assignedCentreId,
+        assignedCentreName: item.assignedCentreId,
+        assignedSlotId: item.assignedSlotId,
+        lotId: item.lotId ?? null,
+        qcAttemptId: item.qcAttemptId ?? null,
+        qcGrade: item.qcGrade ?? null,
+        qcDecision: item.qcDecision ?? null,
+      },
+    });
+    setDialog("qc");
+  };
+
+  const hasArrivedCandidates = metrics?.queueItems?.some((q) => q.isProcessNextCandidate);
+
   return <>
-    <PageHeading eyebrow="Officer Command Centre" title={tx.assignedCentreId ?? "No Centre Assigned"} description={tx.requestId ? `Active Request: ${tx.requestId} · Lot: ${tx.lotId ?? "pending"}` : "Create a procurement request to begin"} action={<div className="flex items-center gap-2"><span className={cn("rounded-full px-3 py-1.5 text-xs font-bold", state.bottleneck ? "bg-warning-muted text-warning-foreground" : "bg-success-muted text-success")}>{state.bottleneck ? "Overloaded" : "Operational"}</span><StatusPill online={state.online} count={state.queuedActions.length} /></div>} />
-    <div className="grid grid-cols-2 gap-3 xl:grid-cols-5">{kpis.map(([label, , Icon]) => <div key={label} className="rounded-md border bg-card p-4 shadow-xs"><div className="flex items-start justify-between"><p className="text-xs font-medium text-muted-foreground">{label}<DemoTag /></p><Icon className="size-4 text-primary" /></div><p className="mt-2 text-lg font-bold text-muted-foreground italic">Placeholder</p></div>)}</div>
+    <PageHeading eyebrow="Officer Command Centre" title={tx.assignedCentreId ?? "MP-SEH-04"} description={tx.requestId ? `Active Request: ${tx.requestId} · Lot: ${tx.lotId ?? "pending"}` : "Select an arrived request from the queue to begin"} action={<div className="flex items-center gap-2"><span className={cn("rounded-full px-3 py-1.5 text-xs font-bold", state.bottleneck ? "bg-warning-muted text-warning-foreground" : "bg-success-muted text-success")}>{state.bottleneck ? "Overloaded" : "Operational"}</span><StatusPill online={state.online} count={state.queuedActions.length} /></div>} />
+    <div className="grid grid-cols-2 gap-3 xl:grid-cols-5">
+      {kpis.map(({ label, value, subtext, Icon, isReal }) => (
+        <div key={label} className="rounded-md border bg-card p-4 shadow-xs">
+          <div className="flex items-start justify-between">
+            <p className="text-xs font-medium text-muted-foreground flex items-center gap-1">
+              {label}
+              {!isReal && <DemoTag />}
+            </p>
+            <Icon className="size-4 text-primary" />
+          </div>
+          <p className={cn("mt-2 text-lg font-bold", isReal ? "text-foreground" : "text-muted-foreground italic")}>
+            {value}
+          </p>
+          <p className={cn("mt-1 text-[10px] truncate", isReal ? "text-muted-foreground" : "text-muted-foreground italic")} title={subtext}>
+            {subtext}
+          </p>
+        </div>
+      ))}
+    </div>
+    {dataError && (
+      <div className="mt-3 flex items-center gap-2 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive">
+        <AlertTriangle className="size-4 shrink-0" />
+        <span className="font-medium">Failed to load live data: {dataError}</span>
+      </div>
+    )}
+    {actionFeedback && (
+      <div
+        className={cn(
+          "mt-3 flex items-center justify-between rounded-md p-3 text-xs",
+          actionFeedback.type === "success"
+            ? "border border-success/30 bg-success-muted text-success"
+            : "border border-destructive/30 bg-destructive/10 text-destructive"
+        )}
+      >
+        <div className="flex items-center gap-2">
+          {actionFeedback.type === "success" ? <Check className="size-4" /> : <AlertTriangle className="size-4" />}
+          <span className="font-medium">{actionFeedback.message}</span>
+        </div>
+        <button
+          type="button"
+          onClick={() => setActionFeedback(null)}
+          className="ml-2 cursor-pointer text-xs font-semibold hover:underline"
+        >
+          Dismiss
+        </button>
+      </div>
+    )}
     <div className="mt-4 grid gap-4 xl:grid-cols-[1.35fr_.65fr]">
       <Panel title="Live Operational Pipeline" subtitle="Real backend operations — click buttons to perform each step">
         <div className="grid grid-cols-3 gap-2 md:grid-cols-6">{stages.map((stage, i) => { const active = stage === state.stage; const done = i < stages.indexOf(state.stage) || (stage === "Payment" && state.paymentComplete); return <Button key={stage} variant="outline" className={cn("h-auto min-h-20 flex-col gap-1 px-2 py-3", active && "border-primary bg-accent ring-2 ring-primary/20", done && "border-success/40 bg-success-muted")} onClick={() => dispatch({ type: "MOVE", stage })}><span className={cn("grid size-6 place-items-center rounded-full text-[11px]", done ? "bg-success text-success-foreground" : active ? "bg-primary text-primary-foreground" : "bg-muted")}>{done ? <Check className="size-3" /> : i + 1}</span><span className="text-xs">{stage}</span></Button>})}</div>
@@ -165,12 +477,22 @@ function CommandCentre({ setDialog }: { setDialog: (d: DialogKind) => void }) {
           {tx.grossAmount != null && <span className="ml-auto text-sm font-bold">₹{tx.grossAmount.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</span>}
         </div>}
         <div className="mt-3 flex flex-wrap gap-2">
-          <Button size="sm" variant="outline" onClick={() => setDialog("booking")}><Sprout />Book Request</Button>
           <Button size="sm" variant="outline" onClick={() => setDialog("arrival")} disabled={!tx.requestId}><ScanLine />Validate Arrival</Button>
           <Button size="sm" variant="outline" onClick={() => setDialog("qc")} disabled={!tx.lotId}><ClipboardCheck />QC Inspection</Button>
-          <Button size="sm" variant="outline" onClick={() => setDialog("weight")} disabled={!tx.lotId}><Scale />Weighment</Button>
-          <Button size="sm" variant="outline" onClick={() => setDialog("procure")} disabled={!tx.weighmentId || !tx.qcAttemptId}><Warehouse />Procure</Button>
+          <Button size="sm" variant="outline" onClick={() => setDialog("weight")} disabled={!tx.lotId || tx.qcGrade === "F"}><Scale />Weighment</Button>
+          <Button size="sm" variant="outline" onClick={() => setDialog("procure")} disabled={!tx.weighmentId || !tx.qcAttemptId || tx.qcGrade === "F"}><Warehouse />Procure</Button>
           <Button size="sm" variant="outline" onClick={() => setDialog("payment")} disabled={!tx.procurementId}><IndianRupee />Payment</Button>
+          {tx.requestId && (
+            <Button
+              size="sm"
+              variant="destructive"
+              onClick={() => handleDirectReject(tx.requestId!, tx.assignedCentreId ?? centreId)}
+              disabled={!tx.requestId || tx.paymentStatus === "PAID" || !!rejectingReqId}
+            >
+              <XCircle className="mr-1 size-3.5" />
+              {rejectingReqId === tx.requestId ? "Rejecting..." : "Reject Request"}
+            </Button>
+          )}
         </div>
       </Panel>
       <Panel title="Transaction Summary" subtitle="Real backend data from current flow">
@@ -185,6 +507,159 @@ function CommandCentre({ setDialog }: { setDialog: (d: DialogKind) => void }) {
           <TxRow label="Procurement" value={tx.procurementId ? `${tx.procurementId} · ₹${tx.grossAmount?.toLocaleString("en-IN", { minimumFractionDigits: 2 })}` : null} />
           <TxRow label="Payment" value={tx.paymentId ? `${tx.paymentId} · ${tx.paymentStatus}` : null} />
         </div>
+      </Panel>
+    </div>
+    <div className="mt-4">
+      <Panel
+        title="Live Centre Queue · सक्रिय कतार"
+        subtitle={`Real operational queue for ${centreId} · ${metrics?.inQueue ?? 0} active request(s) · Earliest arrived farmer is processed next`}
+      >
+        {loading && !metrics && (
+          <p className="py-3 text-sm text-muted-foreground italic">Loading active queue from backend...</p>
+        )}
+        {!loading && (!metrics || metrics.queueItems.length === 0) && (
+          <p className="py-3 text-sm text-muted-foreground italic">No active requests in queue for this centre.</p>
+        )}
+        {!loading && metrics && metrics.queueItems.length > 0 && (
+          <div className="space-y-3">
+            {!hasArrivedCandidates && (
+              <div className="flex items-center gap-2 rounded-md border border-warning/40 bg-warning-muted p-2.5 text-xs text-warning-foreground">
+                <AlertTriangle className="size-4 shrink-0" />
+                <span>No arrived farmers ready for processing. Unarrived farmers remain in queue until arrival is marked.</span>
+              </div>
+            )}
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead>
+                  <tr className="border-b text-muted-foreground">
+                    <th className="pb-2 font-medium">Queue</th>
+                    <th className="pb-2 font-medium">Farmer</th>
+                    <th className="pb-2 font-medium">Request ID</th>
+                    <th className="pb-2 font-medium">Crop</th>
+                    <th className="pb-2 font-medium">Expected Qty</th>
+                    <th className="pb-2 font-medium">Slot</th>
+                    <th className="pb-2 font-medium">Arrival Status</th>
+                    <th className="pb-2 font-medium">Processing Status</th>
+                    <th className="pb-2 font-medium text-right">Action</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y">
+                  {metrics.queueItems.map((item) => {
+                    const isNext = item.isProcessNextCandidate;
+                    const isCurrentTx = tx.requestId === item.requestId;
+                    const isArrived = item.arrivalStatus === "ARRIVED";
+
+                    return (
+                      <tr
+                        key={item.requestId}
+                        className={cn(
+                          "transition-colors",
+                          isCurrentTx
+                            ? "bg-primary/10 font-medium"
+                            : isNext
+                            ? "bg-accent/40"
+                            : "hover:bg-muted/30"
+                        )}
+                      >
+                        <td className="py-2.5 pr-2">
+                          <span
+                            className={cn(
+                              "inline-flex items-center justify-center rounded-full px-2 py-0.5 font-mono font-bold text-[11px]",
+                              isNext
+                                ? "bg-primary text-primary-foreground"
+                                : "bg-muted text-muted-foreground"
+                            )}
+                          >
+                            #{item.queueNumber}
+                          </span>
+                        </td>
+                        <td className="py-2.5 pr-2 font-medium text-foreground">
+                          {item.farmerId}
+                        </td>
+                        <td className="py-2.5 pr-2 font-mono text-[11px] text-muted-foreground">
+                          {item.requestId}
+                        </td>
+                        <td className="py-2.5 pr-2 font-semibold">
+                          {item.cropCode}
+                        </td>
+                        <td className="py-2.5 pr-2">
+                          {item.expectedQuantityKg.toLocaleString()} kg
+                        </td>
+                        <td className="py-2.5 pr-2 font-mono text-[11px] text-muted-foreground">
+                          {item.assignedSlotId}
+                        </td>
+                        <td className="py-2.5 pr-2">
+                          <span
+                            className={cn(
+                              "inline-flex rounded-full px-2 py-0.5 text-[10px] font-bold",
+                              isArrived
+                                ? "bg-success-muted text-success"
+                                : "bg-muted text-muted-foreground"
+                            )}
+                          >
+                            {isArrived ? "Arrived" : "Not Arrived"}
+                          </span>
+                        </td>
+                        <td className="py-2.5 pr-2">
+                          <span className="text-[11px] text-muted-foreground">
+                            {item.currentProcessingStatus}
+                          </span>
+                        </td>
+                        <td className="py-2.5 text-right">
+                          {isNext ? (
+                            <Button
+                              size="sm"
+                              className="h-7 px-2.5 text-xs font-bold"
+                              onClick={() => handleProcessNext(item)}
+                            >
+                              <Play className="mr-1 size-3" />
+                              Process Next
+                            </Button>
+                          ) : item.qcGrade === "F" ? (
+                            <div className="flex items-center justify-end gap-1.5">
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-7 px-2 text-[11px]"
+                                onClick={() => handleOpenQcForItem(item)}
+                              >
+                                <RotateCcw className="mr-1 size-3" />
+                                Retest
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="destructive"
+                                className="h-7 px-2 text-[11px]"
+                                disabled={rejectingReqId === item.requestId}
+                                onClick={() => handleDirectReject(item.requestId, item.assignedCentreId)}
+                              >
+                                <XCircle className="mr-1 size-3" />
+                                {rejectingReqId === item.requestId ? "Rejecting..." : "Reject"}
+                              </Button>
+                            </div>
+                          ) : isArrived ? (
+                            <span className="text-[11px] text-muted-foreground italic">Arrived (Waiting)</span>
+                          ) : (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-7 px-2.5 text-xs font-semibold"
+                              disabled={markingArrivalReqId === item.requestId}
+                              onClick={() => handleMarkArrival(item)}
+                            >
+                              <ScanLine className="mr-1 size-3" />
+                              {markingArrivalReqId === item.requestId ? "Marking..." : "Mark Arrived"}
+                            </Button>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
       </Panel>
     </div>
     <div className="mt-4 grid gap-4 xl:grid-cols-[1.1fr_.9fr]">
@@ -219,14 +694,19 @@ function FarmerExperience({ setDialog }: { setDialog: (d: DialogKind) => void })
   const tx = state.tx;
   const [history, setHistory] = useState<api.PaymentHistoryItem[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
+  const [dataError, setDataError] = useState<string | null>(null);
 
   const farmerId = tx.farmerId || "FMR-104";
 
   useEffect(() => {
     setLoadingHistory(true);
+    setDataError(null);
     api.getFarmerPaymentHistory(farmerId)
       .then(setHistory)
-      .catch(() => setHistory([]))
+      .catch((err) => {
+        setHistory([]);
+        setDataError(err instanceof Error ? err.message : String(err));
+      })
       .finally(() => setLoadingHistory(false));
   }, [farmerId, state.paymentComplete, tx.paymentId, tx.procurementId]);
 
@@ -260,8 +740,14 @@ function FarmerExperience({ setDialog }: { setDialog: (d: DialogKind) => void })
         <div className="space-y-3">{stages.map((s,i)=><div key={s} className="flex items-center gap-3"><span className={cn("grid size-7 place-items-center rounded-full text-xs",i<stages.indexOf(state.stage)||(s==="Payment"&&state.paymentComplete)?"bg-success text-success-foreground":s===state.stage?"bg-primary text-primary-foreground":"bg-muted text-muted-foreground")}>{i<stages.indexOf(state.stage)?<Check className="size-3"/>:i+1}</span><span className={cn("text-sm",s===state.stage&&"font-bold")}>{s}</span>{s===state.stage&&<span className="ml-auto text-xs text-primary">Current stage</span>}</div>)}</div>
       </Panel>
       <Panel title="Payment & Transaction History" subtitle="Full payment records from backend">
+        {dataError && (
+          <div className="mb-3 flex items-center gap-2 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive">
+            <AlertTriangle className="size-4 shrink-0" />
+            <span className="font-medium">Failed to load history: {dataError}</span>
+          </div>
+        )}
         {loadingHistory && <p className="text-sm text-muted-foreground italic">Loading payment history...</p>}
-        {!loadingHistory && history.length === 0 && (
+        {!loadingHistory && !dataError && history.length === 0 && (
           <p className="text-sm text-muted-foreground italic">No payment records found for this farmer.</p>
         )}
         {!loadingHistory && history.length > 0 && (
